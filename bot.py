@@ -22,19 +22,16 @@ from telegram.ext import (
 
 from supabase import create_client
 
-
-# ENV VARIABLES
 TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY").a4zUaP8bSjBC_wnJklmy5sXmU15NLYFfeI4j0f7M3cQ")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 ADMIN_ID = 957422314
 MEMBERSHIP_DAYS = 30
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 logging.basicConfig(level=logging.INFO)
 
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
@@ -45,7 +42,6 @@ MAIN_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -54,15 +50,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "user_id": user.id,
             "username": user.username
         }).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        logging.error(e)
 
     await update.message.reply_text(
-        "👋 Pasha VIP sistemine hoş geldin.\n\n"
-        "VIP kanalları görebilir, üyeliğini kontrol edebilir ve iptal talebi gönderebilirsin.",
+        "👋 Pasha VIP sistemine hoş geldin.",
         reply_markup=MAIN_MENU,
     )
-
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -79,7 +73,6 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👑 Admin Panel",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-
 
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -138,7 +131,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
-
 async def cancel_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -151,21 +143,17 @@ async def cancel_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
     action = parts[1]
     request_id = int(parts[2])
 
-    req_result = supabase.table("cancel_requests").select("*").eq("id", request_id).single().execute()
-    req = req_result.data
+    result = supabase.table("cancel_requests").select("*").eq("id", request_id).single().execute()
+    req = result.data
 
     if not req:
         await query.message.reply_text("❌ Talep bulunamadı.")
         return
 
     if action == "ok":
-        supabase.table("cancel_requests").update({
-            "status": "approved"
-        }).eq("id", request_id).execute()
+        supabase.table("cancel_requests").update({"status": "approved"}).eq("id", request_id).execute()
 
-        supabase.table("subscriptions").update({
-            "status": "cancelled"
-        }).eq("user_id", req["user_id"]).eq("channel_id", req["channel_id"]).execute()
+        supabase.table("subscriptions").update({"status": "cancelled"}).eq("user_id", req["user_id"]).eq("channel_id", req["channel_id"]).execute()
 
         await query.message.reply_text("✅ İptal talebi onaylandı.")
 
@@ -178,9 +166,7 @@ async def cancel_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
     elif action == "no":
-        supabase.table("cancel_requests").update({
-            "status": "rejected"
-        }).eq("id", request_id).execute()
+        supabase.table("cancel_requests").update({"status": "rejected"}).eq("id", request_id).execute()
 
         await query.message.reply_text("❌ İptal talebi reddedildi.")
 
@@ -191,7 +177,6 @@ async def cancel_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         except Exception:
             pass
-
 
 async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -218,11 +203,8 @@ async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }).execute()
 
     await update.message.reply_text(
-        f"✅ Kanal eklendi!\n\n"
-        f"📢 {name}\n"
-        f"⭐ {price} Stars"
+        f"✅ Kanal eklendi!\n\n📢 {name}\n⭐ {price} Stars"
     )
-
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -262,7 +244,6 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for sub in data.data:
             ch_result = supabase.table("channels").select("*").eq("id", sub["channel_id"]).single().execute()
             ch = ch_result.data
-
             channel_name = ch["name"] if ch else f"Kanal ID {sub['channel_id']}"
 
             msg += (
@@ -293,8 +274,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=(
                     "❌ Yeni iptal talebi!\n\n"
                     f"Kullanıcı ID: {user_id}\n"
-                    f"Kanal ID: {sub['channel_id']}\n\n"
-                    "Admin panelden onaylayabilir veya reddedebilirsin."
+                    f"Kanal ID: {sub['channel_id']}"
                 )
             )
 
@@ -302,10 +282,6 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "ℹ️ Yardım":
         await update.message.reply_text("Destek için admin ile iletişime geç.")
-
-    else:
-        await update.message.reply_text("Menüden bir seçenek seçebilirsin.")
-
 
 async def buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -330,16 +306,13 @@ async def buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prices=[LabeledPrice(ch["name"], int(ch["price"]))],
     )
 
-
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
     await query.answer(ok=True)
 
-
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = update.message.successful_payment.invoice_payload
     user_id = update.effective_user.id
-
     channel_id = int(payload.split("_")[1])
 
     result = supabase.table("channels").select("*").eq("id", channel_id).single().execute()
@@ -366,7 +339,6 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"🔗 VIP giriş linkin:\n{ch['invite_link']}\n\n"
         f"Üyelik süresi: {MEMBERSHIP_DAYS} gün"
     )
-
 
 app = ApplicationBuilder().token(TOKEN).build()
 
