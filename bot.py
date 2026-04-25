@@ -90,3 +90,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
 
 print("VIP bot çalışıyor...")
 app.run_polling()
+app.add_handler(CallbackQueryHandler(admin_buttons))
