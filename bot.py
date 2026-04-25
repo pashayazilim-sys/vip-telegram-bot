@@ -36,10 +36,8 @@ logging.basicConfig(level=logging.INFO)
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN Railway Variables içinde yok.")
-
 if not SUPABASE_URL:
     raise ValueError("SUPABASE_URL Railway Variables içinde yok.")
-
 if not SUPABASE_KEY:
     raise ValueError("SUPABASE_KEY Railway Variables içinde yok.")
 
@@ -55,6 +53,16 @@ MAIN_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+ADMIN_MENU = ReplyKeyboardMarkup(
+    [
+        ["👑 Admin Panel"],
+        ["📢 VIP Kanallar"],
+        ["📅 Üyeliğim", "❌ İptal Talebi"],
+        ["ℹ️ Yardım"],
+    ],
+    resize_keyboard=True,
+)
+
 
 def now_utc():
     return datetime.utcnow()
@@ -63,7 +71,6 @@ def now_utc():
 def parse_dt(value):
     if not value:
         return None
-
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
@@ -80,18 +87,11 @@ def safe_username(user):
 
 async def save_user(user):
     try:
-        existing = (
-            supabase.table("users")
-            .select("*")
-            .eq("user_id", user.id)
-            .execute()
-        )
+        existing = supabase.table("users").select("*").eq("user_id", user.id).execute()
 
         if existing.data:
             supabase.table("users").update(
-                {
-                    "username": safe_username(user),
-                }
+                {"username": safe_username(user)}
             ).eq("user_id", user.id).execute()
         else:
             supabase.table("users").insert(
@@ -122,7 +122,6 @@ async def get_channel(channel_id):
 
 async def create_one_time_invite_link(context, ch, user_id):
     chat_id_raw = ch.get("chat_id")
-
     if not chat_id_raw:
         return None
 
@@ -144,7 +143,6 @@ async def create_one_time_invite_link(context, ch, user_id):
 
 async def remove_user_from_channel(context, ch, user_id):
     chat_id_raw = ch.get("chat_id")
-
     if not chat_id_raw:
         return False
 
@@ -207,14 +205,19 @@ async def expire_old_subscriptions(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
     await save_user(user)
 
-    await update.message.reply_text(
-        "👋 Pasha VIP sistemine hoş geldin.\n\n"
-        "VIP kanalları görebilir, üyeliğini kontrol edebilir ve iptal talebi gönderebilirsin.",
-        reply_markup=MAIN_MENU,
-    )
+    if is_admin(user.id):
+        await update.message.reply_text(
+            "👋 Pasha VIP admin sistemine hoş geldin.",
+            reply_markup=ADMIN_MENU,
+        )
+    else:
+        await update.message.reply_text(
+            "👋 Pasha VIP sistemine hoş geldin.\n\n"
+            "VIP kanalları görebilir, üyeliğini kontrol edebilir ve iptal talebi gönderebilirsin.",
+            reply_markup=MAIN_MENU,
+        )
 
 
 async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,12 +240,47 @@ async def channel_id_reader(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def open_admin_panel(message):
+    keyboard = [
+        [InlineKeyboardButton("➕ Kanal Ekle", callback_data="admin_add")],
+        [InlineKeyboardButton("📢 Kanalları Yönet", callback_data="admin_list")],
+        [InlineKeyboardButton("🎁 Kullanıcıya VIP Ver", callback_data="admin_grant")],
+        [InlineKeyboardButton("📊 Satışlar", callback_data="admin_sales")],
+        [InlineKeyboardButton("👥 Kullanıcılar", callback_data="admin_users")],
+        [InlineKeyboardButton("❌ İptal Talepleri", callback_data="admin_cancel")],
+    ]
+
+    await message.reply_text(
+        "👑 Admin Panel\n\nBir işlem seç:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Yetkin yok.")
+        return
+
+    await open_admin_panel(update.message)
+
+
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    user_id = update.effective_user.id
+    user = update.effective_user
+    user_id = user.id
 
-    await save_user(update.effective_user)
+    await save_user(user)
     await expire_old_subscriptions(context)
+
+    mode = context.user_data.get("mode")
+
+    if is_admin(user_id) and mode:
+        await handle_admin_text(update, context)
+        return
+
+    if is_admin(user_id) and text == "👑 Admin Panel":
+        await open_admin_panel(update.message)
+        return
 
     if text == "📢 VIP Kanallar":
         data = (
@@ -368,23 +406,85 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Menüden bir seçenek seçebilirsin.")
 
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
+async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mode = context.user_data.get("mode")
+    text = update.message.text.strip()
 
-    keyboard = [
-        [InlineKeyboardButton("➕ Kanal Ekle", callback_data="admin_add")],
-        [InlineKeyboardButton("📢 Kanalları Gör", callback_data="admin_list")],
-        [InlineKeyboardButton("📊 Satışlar", callback_data="admin_sales")],
-        [InlineKeyboardButton("👥 Kullanıcılar", callback_data="admin_users")],
-        [InlineKeyboardButton("❌ İptal Talepleri", callback_data="admin_cancel")],
-    ]
+    try:
+        if mode == "add_channel":
+            parts = text.split()
 
-    await update.message.reply_text(
-        "👑 Admin Panel",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+            if len(parts) < 4:
+                await update.message.reply_text(
+                    "❌ Format yanlış.\n\n"
+                    "Şöyle yaz:\n"
+                    "KanalAdı Fiyat ChatID SüreGün\n\n"
+                    "Örnek:\n"
+                    "VIP 2500 -1001234567890 30"
+                )
+                return
+
+            name = parts[0]
+            price = int(parts[1])
+            chat_id = parts[2]
+            duration = int(parts[3])
+
+            supabase.table("channels").insert(
+                {
+                    "name": name,
+                    "price": price,
+                    "chat_id": chat_id,
+                    "invite_link": "",
+                    "duration_days": duration,
+                }
+            ).execute()
+
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                f"✅ Kanal eklendi!\n\n"
+                f"📢 {name}\n"
+                f"⭐ {price} Stars\n"
+                f"🆔 Chat ID: {chat_id}\n"
+                f"⏳ {duration} gün"
+            )
+
+        elif mode == "edit_price":
+            channel_id = context.user_data.get("channel_id")
+            price = int(text)
+
+            supabase.table("channels").update(
+                {"price": price}
+            ).eq("id", channel_id).execute()
+
+            context.user_data.clear()
+            await update.message.reply_text(f"✅ Fiyat güncellendi: {price} ⭐")
+
+        elif mode == "edit_duration":
+            channel_id = context.user_data.get("channel_id")
+            days = int(text)
+
+            supabase.table("channels").update(
+                {"duration_days": days}
+            ).eq("id", channel_id).execute()
+
+            context.user_data.clear()
+            await update.message.reply_text(f"✅ Süre güncellendi: {days} gün")
+
+        elif mode == "edit_chat":
+            channel_id = context.user_data.get("channel_id")
+            chat_id = text
+
+            supabase.table("channels").update(
+                {"chat_id": chat_id}
+            ).eq("id", channel_id).execute()
+
+            context.user_data.clear()
+            await update.message.reply_text("✅ Chat ID güncellendi.")
+
+    except Exception as e:
+        logging.error(e)
+        await update.message.reply_text("❌ İşlem sırasında hata oldu. Formatı kontrol et.")
 
 
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -395,148 +495,75 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("❌ Yetkin yok.")
         return
 
-    if query.data == "admin_add":
+    data = query.data
+
+    if data == "admin_add":
+        context.user_data["mode"] = "add_channel"
+
         await query.message.reply_text(
-            "➕ Kanal ekle:\n\n"
-            "/ekle KanalAdı Fiyat ChatID SüreGün\n\n"
+            "➕ Kanal bilgilerini tek mesaj olarak yaz:\n\n"
+            "KanalAdı Fiyat ChatID SüreGün\n\n"
             "Örnek:\n"
-            "/ekle VIP 2500 -1001234567890 30\n\n"
-            "ChatID almak için botu VIP kanala admin yap ve kanalda /id yaz."
+            "VIP 2500 -1001234567890 30\n\n"
+            "Not: Kanal adı boşluk içermesin. VIP_Yazilim gibi yazabilirsin."
         )
 
-    elif query.data == "admin_list":
-        await list_channels_message(query.message)
+    elif data == "admin_list":
+        await list_channels_manage(query.message)
 
-    elif query.data == "admin_sales":
+    elif data == "admin_sales":
         await sales_message(query.message)
 
-    elif query.data == "admin_users":
+    elif data == "admin_users":
         await users_message(query.message)
 
-    elif query.data == "admin_cancel":
+    elif data == "admin_cancel":
         await cancel_requests_message(query.message)
 
+    elif data == "admin_grant":
+        await show_users_for_grant(query.message)
 
-async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
+    elif data.startswith("ch_delete_"):
+        channel_id = int(data.split("_")[2])
+        supabase.table("channels").delete().eq("id", channel_id).execute()
+        await query.message.reply_text(f"✅ Kanal silindi. ID: {channel_id}")
 
-    if len(context.args) < 4:
-        await update.message.reply_text(
-            "❌ Kullanım:\n"
-            "/ekle KanalAdı Fiyat ChatID SüreGün\n\n"
-            "Örnek:\n"
-            "/ekle VIP 2500 -1001234567890 30"
+    elif data.startswith("ch_price_"):
+        channel_id = int(data.split("_")[2])
+        context.user_data["mode"] = "edit_price"
+        context.user_data["channel_id"] = channel_id
+        await query.message.reply_text("💰 Yeni fiyatı yaz. Örnek: 3000")
+
+    elif data.startswith("ch_duration_"):
+        channel_id = int(data.split("_")[2])
+        context.user_data["mode"] = "edit_duration"
+        context.user_data["channel_id"] = channel_id
+        await query.message.reply_text("⏳ Yeni süreyi gün olarak yaz. Örnek: 60")
+
+    elif data.startswith("ch_chat_"):
+        channel_id = int(data.split("_")[2])
+        context.user_data["mode"] = "edit_chat"
+        context.user_data["channel_id"] = channel_id
+        await query.message.reply_text("🆔 Yeni Chat ID yaz. Örnek: -1001234567890")
+
+    elif data.startswith("grant_user_"):
+        target_user_id = int(data.split("_")[2])
+        await show_channels_for_grant(query.message, target_user_id)
+
+    elif data.startswith("grant_channel_"):
+        parts = data.split("_")
+        target_user_id = int(parts[2])
+        channel_id = int(parts[3])
+
+        await grant_vip_to_user(
+            message=query.message,
+            context=context,
+            target_user_id=target_user_id,
+            channel_id=channel_id,
         )
-        return
-
-    name = context.args[0]
-    price = int(context.args[1])
-    chat_id = context.args[2]
-    duration = int(context.args[3])
-
-    supabase.table("channels").insert(
-        {
-            "name": name,
-            "price": price,
-            "chat_id": chat_id,
-            "invite_link": "",
-            "duration_days": duration,
-        }
-    ).execute()
-
-    await update.message.reply_text(
-        f"✅ Kanal eklendi!\n\n"
-        f"📢 {name}\n"
-        f"⭐ {price} Stars\n"
-        f"🆔 Chat ID: {chat_id}\n"
-        f"⏳ {duration} gün"
-    )
 
 
-async def delete_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
-
-    if len(context.args) < 1:
-        await update.message.reply_text("❌ Kullanım: /sil KanalID")
-        return
-
-    channel_id = int(context.args[0])
-
-    supabase.table("channels").delete().eq("id", channel_id).execute()
-
-    await update.message.reply_text(f"✅ Kanal silindi. ID: {channel_id}")
-
-
-async def change_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text("❌ Kullanım: /fiyat KanalID YeniFiyat")
-        return
-
-    channel_id = int(context.args[0])
-    price = int(context.args[1])
-
-    supabase.table("channels").update(
-        {"price": price}
-    ).eq("id", channel_id).execute()
-
-    await update.message.reply_text(f"✅ Fiyat güncellendi: {price} ⭐")
-
-
-async def change_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text("❌ Kullanım: /sure KanalID Gün")
-        return
-
-    channel_id = int(context.args[0])
-    days = int(context.args[1])
-
-    supabase.table("channels").update(
-        {"duration_days": days}
-    ).eq("id", channel_id).execute()
-
-    await update.message.reply_text(f"✅ Süre güncellendi: {days} gün")
-
-
-async def change_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text("❌ Kullanım: /chat KanalID ChatID")
-        return
-
-    channel_id = int(context.args[0])
-    chat_id = context.args[1]
-
-    supabase.table("channels").update(
-        {"chat_id": chat_id}
-    ).eq("id", channel_id).execute()
-
-    await update.message.reply_text("✅ Chat ID güncellendi.")
-
-
-async def list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
-
-    await list_channels_message(update.message)
-
-
-async def list_channels_message(message):
+async def list_channels_manage(message):
     data = (
         supabase.table("channels")
         .select("*")
@@ -548,26 +575,200 @@ async def list_channels_message(message):
         await message.reply_text("📢 Henüz kanal yok.")
         return
 
-    text = "📢 Kanallar:\n\n"
-
     for ch in data.data:
-        text += (
+        keyboard = [
+            [
+                InlineKeyboardButton("💰 Fiyat", callback_data=f"ch_price_{ch['id']}"),
+                InlineKeyboardButton("⏳ Süre", callback_data=f"ch_duration_{ch['id']}"),
+            ],
+            [
+                InlineKeyboardButton("🆔 Chat ID", callback_data=f"ch_chat_{ch['id']}"),
+                InlineKeyboardButton("🗑️ Sil", callback_data=f"ch_delete_{ch['id']}"),
+            ],
+        ]
+
+        await message.reply_text(
+            f"📢 Kanal\n\n"
             f"ID: {ch['id']}\n"
             f"Ad: {ch['name']}\n"
             f"Fiyat: {ch['price']} ⭐\n"
             f"Süre: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} gün\n"
-            f"Chat ID: {ch.get('chat_id')}\n\n"
+            f"Chat ID: {ch.get('chat_id')}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    await message.reply_text(text)
 
+async def show_users_for_grant(message):
+    data = (
+        supabase.table("users")
+        .select("*")
+        .order("id", desc=True)
+        .limit(20)
+        .execute()
+    )
 
-async def sales(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
+    if not data.data:
+        await message.reply_text("👥 Henüz kullanıcı yok. Kullanıcı önce /start yazmalı.")
         return
 
-    await sales_message(update.message)
+    for u in data.data:
+        username = f"@{u['username']}" if u.get("username") else "username yok"
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🎁 Bu kullanıcıya VIP ver",
+                    callback_data=f"grant_user_{u['user_id']}",
+                )
+            ]
+        ]
+
+        await message.reply_text(
+            f"👤 Kullanıcı\n\n"
+            f"ID: {u['user_id']}\n"
+            f"Username: {username}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
+async def show_channels_for_grant(message, target_user_id):
+    data = (
+        supabase.table("channels")
+        .select("*")
+        .order("id")
+        .execute()
+    )
+
+    if not data.data:
+        await message.reply_text("📢 Önce kanal eklemelisin.")
+        return
+
+    for ch in data.data:
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    f"🎁 {ch['name']} VIP ver",
+                    callback_data=f"grant_channel_{target_user_id}_{ch['id']}",
+                )
+            ]
+        ]
+
+        await message.reply_text(
+            f"📢 Kanal seç\n\n"
+            f"Ad: {ch['name']}\n"
+            f"Fiyat: {ch['price']} ⭐\n"
+            f"Süre: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} gün",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
+async def grant_vip_to_user(message, context, target_user_id, channel_id):
+    ch = await get_channel(channel_id)
+
+    if not ch:
+        await message.reply_text("❌ Kanal bulunamadı.")
+        return
+
+    duration_days = int(ch.get("duration_days") or DEFAULT_DURATION_DAYS)
+    current_time = now_utc()
+
+    existing = (
+        supabase.table("subscriptions")
+        .select("*")
+        .eq("user_id", target_user_id)
+        .eq("channel_id", channel_id)
+        .eq("status", "active")
+        .execute()
+    )
+
+    if existing.data:
+        sub = existing.data[0]
+        old_end = parse_dt(sub.get("end_date")) or current_time
+        base_date = old_end if old_end > current_time else current_time
+        new_end = base_date + timedelta(days=duration_days)
+
+        supabase.table("subscriptions").update(
+            {
+                "end_date": new_end.isoformat(),
+                "status": "active",
+                "price": 0,
+            }
+        ).eq("id", sub["id"]).execute()
+
+        start_date = sub["start_date"]
+        end_date = new_end.isoformat()
+
+    else:
+        start = current_time
+        end = start + timedelta(days=duration_days)
+
+        supabase.table("subscriptions").insert(
+            {
+                "user_id": target_user_id,
+                "channel_id": channel_id,
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "status": "active",
+                "price": 0,
+            }
+        ).execute()
+
+        start_date = start.isoformat()
+        end_date = end.isoformat()
+
+    vip_link = None
+
+    try:
+        vip_link = await create_one_time_invite_link(
+            context=context,
+            ch=ch,
+            user_id=target_user_id,
+        )
+    except Exception as e:
+        logging.error(f"VIP link üretilemedi: {e}")
+
+    if vip_link:
+        supabase.table("subscriptions").update(
+            {"generated_invite_link": vip_link}
+        ).eq("user_id", target_user_id).eq("channel_id", channel_id).eq("status", "active").execute()
+
+    supabase.table("sales").insert(
+        {
+            "user_id": target_user_id,
+            "username": "manual_admin",
+            "channel_id": channel_id,
+            "price": 0,
+            "payment_payload": "manual_admin_grant",
+        }
+    ).execute()
+
+    if vip_link:
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=(
+                    "🎁 Admin sana VIP erişim verdi!\n\n"
+                    f"📢 Kanal: {ch['name']}\n"
+                    f"🔗 Tek kullanımlık giriş linkin:\n{vip_link}\n\n"
+                    f"Başlangıç: {start_date}\n"
+                    f"Bitiş: {end_date}"
+                ),
+            )
+
+            await message.reply_text("✅ VIP yetki verildi ve link kullanıcıya gönderildi.")
+
+        except Exception:
+            await message.reply_text(
+                "✅ VIP yetki verildi ama kullanıcıya mesaj gönderilemedi.\n\n"
+                "Muhtemelen kullanıcı botu başlatmamış.\n\n"
+                f"Linki manuel gönder:\n{vip_link}"
+            )
+
+    else:
+        await message.reply_text(
+            "✅ VIP yetki verildi ama davet linki üretilemedi.\n\n"
+            "Botun kanalda admin ve davet yetkisi olduğundan emin ol."
+        )
 
 
 async def sales_message(message):
@@ -583,11 +784,11 @@ async def sales_message(message):
         await message.reply_text("📊 Henüz satış yok.")
         return
 
-    text = "📊 Son satışlar:\n\n"
+    text = "📊 Son kayıtlar:\n\n"
 
     for s in data.data:
         text += (
-            f"Satış ID: {s['id']}\n"
+            f"ID: {s['id']}\n"
             f"Kullanıcı: @{s.get('username') or 'yok'}\n"
             f"Kullanıcı ID: {s['user_id']}\n"
             f"Kanal ID: {s['channel_id']}\n"
@@ -596,14 +797,6 @@ async def sales_message(message):
         )
 
     await message.reply_text(text)
-
-
-async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Yetkin yok.")
-        return
-
-    await users_message(update.message)
 
 
 async def users_message(message):
@@ -676,7 +869,6 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     duration_days = int(ch.get("duration_days") or DEFAULT_DURATION_DAYS)
     price = int(ch["price"])
-
     current_time = now_utc()
 
     existing = (
@@ -764,7 +956,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             "✅ Ödeme başarılı fakat otomatik davet linki üretilemedi.\n\n"
             "Admin ile iletişime geç.\n\n"
-            "Muhtemel sebep: Bot VIP kanalda admin değil veya Invite Users yetkisi yok."
+            "Muhtemel sebep: Bot VIP kanalda admin değil veya davet yetkisi yok."
         )
 
         await context.bot.send_message(
@@ -773,8 +965,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "⚠️ Davet linki üretilemedi!\n\n"
                 f"Kullanıcı ID: {user_id}\n"
                 f"Kanal: {ch['name']}\n"
-                f"Kanal ID: {channel_id}\n\n"
-                "Botun VIP kanalda admin ve davet linki yetkisi olduğundan emin ol."
+                f"Kanal ID: {channel_id}"
             ),
         )
 
@@ -881,23 +1072,14 @@ async def cancel_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("admin", admin_command))
 app.add_handler(CommandHandler("id", get_chat_id))
 
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.TEXT, channel_id_reader))
 
-app.add_handler(CommandHandler("admin", admin))
-app.add_handler(CommandHandler("ekle", add_channel))
-app.add_handler(CommandHandler("sil", delete_channel))
-app.add_handler(CommandHandler("fiyat", change_price))
-app.add_handler(CommandHandler("sure", change_duration))
-app.add_handler(CommandHandler("chat", change_chat_id))
-app.add_handler(CommandHandler("kanallar", list_channels))
-app.add_handler(CommandHandler("satislar", sales))
-app.add_handler(CommandHandler("kullanicilar", users))
-
 app.add_handler(CallbackQueryHandler(buy_button, pattern="^buy_"))
 app.add_handler(CallbackQueryHandler(cancel_admin_buttons, pattern="^cancel_"))
-app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^admin_"))
+app.add_handler(CallbackQueryHandler(admin_buttons))
 
 app.add_handler(PreCheckoutQueryHandler(precheckout))
 app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
