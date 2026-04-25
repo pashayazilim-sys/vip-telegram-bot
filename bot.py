@@ -26,15 +26,11 @@ from telegram.ext import (
 from supabase import create_client
 
 
-# =========================
-# ENV
-# =========================
-
 TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-ADMIN_ID = 957422314
+OWNER_ID = 957422314
 
 DEFAULT_DURATION_DAYS = 30
 INVITE_LINK_EXPIRE_MINUTES = 30
@@ -53,15 +49,12 @@ if not SUPABASE_KEY:
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# =========================
-# MENÜLER
-# =========================
-
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         ["📢 VIP Kanallar"],
-        ["📅 Üyeliğim", "❌ İptal Talebi"],
-        ["🎟️ Kupon Gir", "🆘 Destek"],
+        ["📅 Üyeliğim", "📜 Geçmişim"],
+        ["❌ İptal Talebi", "🎟️ Kupon Gir"],
+        ["❓ SSS", "🆘 Destek"],
         ["ℹ️ Yardım"],
     ],
     resize_keyboard=True,
@@ -71,17 +64,14 @@ ADMIN_MENU = ReplyKeyboardMarkup(
     [
         ["👑 Admin Panel"],
         ["📢 VIP Kanallar"],
-        ["📅 Üyeliğim", "❌ İptal Talebi"],
-        ["🎟️ Kupon Gir", "🆘 Destek"],
+        ["📅 Üyeliğim", "📜 Geçmişim"],
+        ["❌ İptal Talebi", "🎟️ Kupon Gir"],
+        ["❓ SSS", "🆘 Destek"],
         ["ℹ️ Yardım"],
     ],
     resize_keyboard=True,
 )
 
-
-# =========================
-# HELPERS
-# =========================
 
 def now_utc():
     return datetime.utcnow()
@@ -96,12 +86,44 @@ def parse_dt(value):
         return None
 
 
-def is_admin(user_id):
-    return int(user_id) == ADMIN_ID
-
-
 def safe_username(user):
     return user.username if user and user.username else None
+
+
+def is_owner(user_id):
+    return int(user_id) == OWNER_ID
+
+
+def get_admin_role(user_id):
+    if is_owner(user_id):
+        return "owner"
+
+    try:
+        result = (
+            supabase.table("admins")
+            .select("*")
+            .eq("user_id", int(user_id))
+            .eq("active", True)
+            .execute()
+        )
+        if result.data:
+            return result.data[0].get("role") or "manager"
+    except Exception as e:
+        logger.error("Admin rol okunamadı: %s", e)
+
+    return None
+
+
+def is_admin(user_id):
+    return get_admin_role(user_id) is not None
+
+
+def can_manage(user_id):
+    return get_admin_role(user_id) in ["owner", "manager"]
+
+
+def can_view_reports(user_id):
+    return get_admin_role(user_id) in ["owner", "manager", "viewer"]
 
 
 def get_setting(key, default=None):
@@ -109,32 +131,43 @@ def get_setting(key, default=None):
         result = supabase.table("settings").select("*").eq("key", key).execute()
         if result.data:
             return result.data[0].get("value")
-    except Exception as e:
-        logger.error("Setting okunamadı: %s", e)
+    except Exception:
+        pass
     return default
 
 
 def set_setting(key, value):
-    try:
-        result = supabase.table("settings").select("*").eq("key", key).execute()
-        if result.data:
-            supabase.table("settings").update({"value": value}).eq("key", key).execute()
-        else:
-            supabase.table("settings").insert({"key": key, "value": value}).execute()
-    except Exception as e:
-        logger.error("Setting yazılamadı: %s", e)
+    existing = supabase.table("settings").select("*").eq("key", key).execute()
+    if existing.data:
+        supabase.table("settings").update({"value": value}).eq("key", key).execute()
+    else:
+        supabase.table("settings").insert({"key": key, "value": value}).execute()
 
 
 def maintenance_on():
     return get_setting("maintenance", "off") == "on"
 
 
+async def log_event(action, actor_id=None, target_user_id=None, channel_id=None, details=None):
+    try:
+        supabase.table("logs").insert(
+            {
+                "action": action,
+                "actor_id": actor_id,
+                "target_user_id": target_user_id,
+                "channel_id": channel_id,
+                "details": details,
+            }
+        ).execute()
+    except Exception as e:
+        logger.error("Log yazılamadı: %s", e)
+
+
 async def get_user_row(user_id):
     try:
         result = supabase.table("users").select("*").eq("user_id", int(user_id)).execute()
         return result.data[0] if result.data else None
-    except Exception as e:
-        logger.error("Kullanıcı alınamadı: %s", e)
+    except Exception:
         return None
 
 
@@ -142,32 +175,40 @@ async def save_user(user):
     if not user:
         return
 
-    try:
-        existing = supabase.table("users").select("*").eq("user_id", user.id).execute()
+    existing = supabase.table("users").select("*").eq("user_id", user.id).execute()
 
-        payload = {
-            "username": safe_username(user),
-        }
+    payload = {"username": safe_username(user)}
 
-        if existing.data:
-            supabase.table("users").update(payload).eq("user_id", user.id).execute()
-        else:
-            payload.update(
-                {
-                    "user_id": user.id,
-                    "accepted_terms": False,
-                    "active_coupon": None,
-                }
-            )
-            supabase.table("users").insert(payload).execute()
-
-    except Exception as e:
-        logger.error("Kullanıcı kaydedilemedi: %s", e)
+    if existing.data:
+        supabase.table("users").update(payload).eq("user_id", user.id).execute()
+    else:
+        payload.update(
+            {
+                "user_id": user.id,
+                "accepted_terms": False,
+                "active_coupon": None,
+            }
+        )
+        supabase.table("users").insert(payload).execute()
 
 
 async def user_accepted_terms(user_id):
     row = await get_user_row(user_id)
     return bool(row and row.get("accepted_terms"))
+
+
+async def is_blacklisted(user_id):
+    try:
+        result = (
+            supabase.table("blacklist")
+            .select("*")
+            .eq("user_id", int(user_id))
+            .eq("active", True)
+            .execute()
+        )
+        return bool(result.data)
+    except Exception:
+        return False
 
 
 async def get_channel(channel_id):
@@ -180,8 +221,7 @@ async def get_channel(channel_id):
             .execute()
         )
         return result.data
-    except Exception as e:
-        logger.error("Kanal alınamadı: %s", e)
+    except Exception:
         return None
 
 
@@ -195,8 +235,7 @@ async def get_subscription(sub_id):
             .execute()
         )
         return result.data
-    except Exception as e:
-        logger.error("Üyelik alınamadı: %s", e)
+    except Exception:
         return None
 
 
@@ -225,28 +264,20 @@ async def remove_user_from_channel(context, ch, user_id):
         return False
 
     try:
-        await context.bot.ban_chat_member(
-            chat_id=int(chat_id_raw),
-            user_id=int(user_id),
-        )
-
+        await context.bot.ban_chat_member(chat_id=int(chat_id_raw), user_id=int(user_id))
         await context.bot.unban_chat_member(
             chat_id=int(chat_id_raw),
             user_id=int(user_id),
             only_if_banned=True,
         )
-
         return True
-
     except Exception as e:
-        logger.error("Kullanıcı kanaldan çıkarılamadı: %s", e)
+        logger.error("Kanaldan çıkarma hatası: %s", e)
         return False
 
 
 async def show_terms(message):
-    keyboard = [
-        [InlineKeyboardButton("✅ Kabul Ediyorum", callback_data="accept_terms")]
-    ]
+    keyboard = [[InlineKeyboardButton("✅ Kabul Ediyorum", callback_data="accept_terms")]]
 
     await message.reply_text(
         "⚠️ Kurallar ve Kullanım Onayı\n\n"
@@ -256,33 +287,25 @@ async def show_terms(message):
     )
 
 
-# =========================
-# START
-# =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await save_user(user)
+
+    if await is_blacklisted(user.id) and not is_admin(user.id):
+        await update.message.reply_text("🚫 Bu botu kullanma yetkin kısıtlandı.")
+        return
 
     if not is_admin(user.id) and not await user_accepted_terms(user.id):
         await show_terms(update.message)
         return
 
-    if is_admin(user.id):
-        await update.message.reply_text(
-            "👋 Pasha VIP admin sistemine hoş geldin.",
-            reply_markup=ADMIN_MENU,
-        )
-    else:
-        await update.message.reply_text(
-            "👋 Pasha VIP sistemine hoş geldin.",
-            reply_markup=MAIN_MENU,
-        )
+    await update.message.reply_text(
+        "👋 Pasha VIP admin sistemine hoş geldin."
+        if is_admin(user.id)
+        else "👋 Pasha VIP sistemine hoş geldin.",
+        reply_markup=ADMIN_MENU if is_admin(user.id) else MAIN_MENU,
+    )
 
-
-# =========================
-# KANAL ID BULMA — KOMUT YOK
-# =========================
 
 async def channel_id_reader(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.channel_post:
@@ -291,86 +314,76 @@ async def channel_id_reader(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.channel_post.text or "").lower().strip()
 
     if text in ["id", "chat id", "kanal id", "kanalid"]:
-        chat_id = update.channel_post.chat_id
-
         await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"Chat ID:\n{chat_id}"
+            chat_id=update.channel_post.chat_id,
+            text=f"Chat ID:\n{update.channel_post.chat_id}",
         )
 
-
-# =========================
-# ADMIN DASHBOARD
-# =========================
 
 async def admin_dashboard_text():
     today = now_utc().date().isoformat()
     month = now_utc().strftime("%Y-%m")
 
-    try:
-        sales = supabase.table("sales").select("*").execute().data or []
+    sales = supabase.table("sales").select("*").execute().data or []
+    active_subs = (
+        supabase.table("subscriptions")
+        .select("*")
+        .eq("status", "active")
+        .execute()
+        .data
+        or []
+    )
+    supports = (
+        supabase.table("support_requests")
+        .select("*")
+        .eq("status", "open")
+        .execute()
+        .data
+        or []
+    )
+    blacklisted = (
+        supabase.table("blacklist")
+        .select("*")
+        .eq("active", True)
+        .execute()
+        .data
+        or []
+    )
 
-        active_subs = (
-            supabase.table("subscriptions")
-            .select("*")
-            .eq("status", "active")
-            .execute()
-            .data
-            or []
-        )
+    today_count = today_stars = month_count = month_stars = 0
 
-        supports = (
-            supabase.table("support_requests")
-            .select("*")
-            .eq("status", "open")
-            .execute()
-            .data
-            or []
-        )
+    for s in sales:
+        created = str(s.get("created_at") or "")
+        price = int(s.get("price") or 0)
 
-        today_count = 0
-        today_stars = 0
-        month_count = 0
-        month_stars = 0
+        if created.startswith(today):
+            today_count += 1
+            today_stars += price
 
-        for s in sales:
-            created = str(s.get("created_at") or "")
-            price = int(s.get("price") or 0)
+        if created.startswith(month):
+            month_count += 1
+            month_stars += price
 
-            if created.startswith(today):
-                today_count += 1
-                today_stars += price
+    expiring_today = 0
 
-            if created.startswith(month):
-                month_count += 1
-                month_stars += price
+    for sub in active_subs:
+        end = parse_dt(sub.get("end_date"))
+        if end and end.date() == now_utc().date():
+            expiring_today += 1
 
-        expiring_today = 0
-        current = now_utc()
-
-        for sub in active_subs:
-            end = parse_dt(sub.get("end_date"))
-            if end and end.date() == current.date():
-                expiring_today += 1
-
-        return (
-            "👑 Admin Panel\n\n"
-            f"📊 Bugün: {today_count} satış / {today_stars} Stars\n"
-            f"📆 Bu ay: {month_count} satış / {month_stars} Stars\n"
-            f"👥 Aktif üye: {len(active_subs)}\n"
-            f"⏳ Bugün bitecek üyelik: {expiring_today}\n"
-            f"🆘 Açık destek talebi: {len(supports)}\n"
-            f"🔧 Bakım modu: {'AÇIK' if maintenance_on() else 'KAPALI'}"
-        )
-
-    except Exception as e:
-        logger.error("Dashboard hatası: %s", e)
-        return "👑 Admin Panel\n\nÖzet alınamadı."
+    return (
+        "👑 Admin Panel\n\n"
+        f"📊 Bugün: {today_count} satış / {today_stars} Stars\n"
+        f"📆 Bu ay: {month_count} satış / {month_stars} Stars\n"
+        f"👥 Aktif üye: {len(active_subs)}\n"
+        f"⏳ Bugün bitecek üyelik: {expiring_today}\n"
+        f"🆘 Açık destek talebi: {len(supports)}\n"
+        f"🚫 Kara liste: {len(blacklisted)}\n"
+        f"🔧 Bakım modu: {'AÇIK' if maintenance_on() else 'KAPALI'}"
+    )
 
 
 async def open_admin_panel(message):
-    maintenance_text = "AÇIK 🔧" if maintenance_on() else "KAPALI ✅"
-
     keyboard = [
         [InlineKeyboardButton("➕ Kanal Ekle", callback_data="admin_add")],
         [InlineKeyboardButton("📢 Kanalları Yönet", callback_data="admin_list")],
@@ -381,12 +394,16 @@ async def open_admin_panel(message):
         [InlineKeyboardButton("👥 Kullanıcılar", callback_data="admin_users")],
         [InlineKeyboardButton("🔍 Kullanıcı Ara", callback_data="admin_search_user")],
         [InlineKeyboardButton("🎟️ Kuponlar", callback_data="admin_coupons")],
+        [InlineKeyboardButton("❓ SSS Yönet", callback_data="admin_faq")],
         [InlineKeyboardButton("📣 Toplu Duyuru", callback_data="admin_broadcast")],
         [InlineKeyboardButton("🆔 Kanal ID Yardımı", callback_data="admin_channel_id_help")],
         [InlineKeyboardButton("🆘 Destek Talepleri", callback_data="admin_support")],
         [InlineKeyboardButton("❌ İptal Talepleri", callback_data="admin_cancel")],
+        [InlineKeyboardButton("🚫 Kara Liste", callback_data="admin_blacklist")],
+        [InlineKeyboardButton("👮 Adminler", callback_data="admin_admins")],
+        [InlineKeyboardButton("📜 İşlem Logları", callback_data="admin_logs")],
         [InlineKeyboardButton("📄 Satış CSV", callback_data="admin_export_sales")],
-        [InlineKeyboardButton(f"🔧 Bakım Modu: {maintenance_text}", callback_data="admin_maintenance")],
+        [InlineKeyboardButton("🔧 Bakım Modu Aç/Kapat", callback_data="admin_maintenance")],
     ]
 
     await message.reply_text(
@@ -395,10 +412,6 @@ async def open_admin_panel(message):
     )
 
 
-# =========================
-# MAIN MENU
-# =========================
-
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user = update.effective_user
@@ -406,6 +419,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await save_user(user)
     await expire_old_subscriptions(context)
+
+    if await is_blacklisted(user_id) and not is_admin(user_id):
+        await update.message.reply_text("🚫 Bu botu kullanma yetkin kısıtlandı.")
+        return
 
     if not is_admin(user_id) and not await user_accepted_terms(user_id):
         await show_terms(update.message)
@@ -421,35 +438,32 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_admin(user_id) and text == "👑 Admin Panel":
         await open_admin_panel(update.message)
-        return
-
-    if text == "📢 VIP Kanallar":
+    elif text == "📢 VIP Kanallar":
         await show_vip_channels(update.message, user_id)
-
     elif text == "📅 Üyeliğim":
         await show_my_subscriptions(update.message, user_id)
-
+    elif text == "📜 Geçmişim":
+        await my_history(update.message, user_id)
     elif text == "❌ İptal Talebi":
         await create_cancel_request(update, context)
-
     elif text == "🎟️ Kupon Gir":
         context.user_data["mode"] = "user_coupon"
         await update.message.reply_text("🎟️ Kupon kodunu yaz:")
-
     elif text == "🆘 Destek":
         context.user_data["mode"] = "user_support"
         await update.message.reply_text("🆘 Sorununu tek mesaj olarak yaz:")
-
+    elif text == "❓ SSS":
+        await faq_user_message(update.message)
     elif text == "ℹ️ Yardım":
         await update.message.reply_text(
             "ℹ️ Yardım\n\n"
             "📢 VIP Kanallar: Satın alınabilir kanalları gösterir.\n"
             "📅 Üyeliğim: Aktif üyeliklerini gösterir.\n"
+            "📜 Geçmişim: Satın alma ve üyelik geçmişini gösterir.\n"
             "🎟️ Kupon Gir: İndirim kodu uygular.\n"
             "🆘 Destek: Admin’e destek talebi gönderir.\n"
             "❌ İptal Talebi: Admin onayına iptal talebi gönderir."
         )
-
     else:
         await update.message.reply_text("Menüden bir seçenek seçebilirsin.")
 
@@ -468,48 +482,58 @@ async def show_vip_channels(message, user_id):
         return
 
     for ch in data.data:
-        duration = ch.get("duration_days") or DEFAULT_DURATION_DAYS
         base_price = int(ch["price"])
-
-        final_price, coupon_code, discount_text = await calculate_price(user_id, base_price)
+        final_price, coupon_code, discount_text = await calculate_price(user_id, base_price, ch["id"])
 
         keyboard = [
-            [
-                InlineKeyboardButton(
-                    f"⭐ {final_price} Stars ile Satın Al",
-                    callback_data=f"buy_{ch['id']}",
-                )
-            ]
+            [InlineKeyboardButton("👁️ Önizleme", callback_data=f"preview_{ch['id']}")],
+            [InlineKeyboardButton(f"⭐ {final_price} Stars ile Satın Al", callback_data=f"buy_{ch['id']}")],
         ]
 
         coupon_line = f"\n🎟️ Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
-        desc = f"\n📝 {ch.get('description')}" if ch.get("description") else ""
 
-        msg = (
+        await message.reply_text(
             f"📢 {ch['name']}\n"
             f"⭐ Fiyat: {base_price} Stars\n"
             f"✅ Ödenecek: {final_price} Stars\n"
-            f"⏳ Süre: {duration} gün"
-            f"{coupon_line}{desc}"
+            f"⏳ Süre: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} gün"
+            f"{coupon_line}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-        if ch.get("photo_url"):
-            try:
-                await message.reply_photo(
-                    ch["photo_url"],
-                    caption=msg,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                )
-            except Exception:
-                await message.reply_text(
-                    msg,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                )
-        else:
-            await message.reply_text(
-                msg,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
+
+async def show_channel_preview(message, channel_id, user_id):
+    ch = await get_channel(channel_id)
+
+    if not ch:
+        await message.reply_text("❌ Kanal bulunamadı.")
+        return
+
+    base_price = int(ch["price"])
+    final_price, coupon_code, discount_text = await calculate_price(user_id, base_price, ch["id"])
+
+    keyboard = [[InlineKeyboardButton(f"⭐ {final_price} Stars ile Satın Al", callback_data=f"buy_{ch['id']}")]]
+
+    coupon_line = f"\n🎟️ Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
+
+    text = (
+        f"👁️ Kanal Önizleme\n\n"
+        f"📢 {ch['name']}\n"
+        f"⭐ Fiyat: {base_price} Stars\n"
+        f"✅ Ödenecek: {final_price} Stars\n"
+        f"⏳ Süre: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} gün\n"
+        f"📝 {ch.get('description') or 'Açıklama yok.'}"
+        f"{coupon_line}"
+    )
+
+    if ch.get("photo_url"):
+        try:
+            await message.reply_photo(ch["photo_url"], caption=text, reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        except Exception:
+            pass
+
+    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def show_my_subscriptions(message, user_id):
@@ -545,9 +569,48 @@ async def show_my_subscriptions(message, user_id):
         )
 
 
-# =========================
-# TEXT MODES
-# =========================
+async def my_history(message, user_id):
+    sales = (
+        supabase.table("sales")
+        .select("*")
+        .eq("user_id", int(user_id))
+        .order("id", desc=True)
+        .limit(10)
+        .execute()
+    )
+
+    subs = (
+        supabase.table("subscriptions")
+        .select("*")
+        .eq("user_id", int(user_id))
+        .order("id", desc=True)
+        .limit(10)
+        .execute()
+    )
+
+    text = "📜 Geçmişin\n\n"
+
+    if sales.data:
+        text += "Satın almalar:\n"
+        for s in sales.data:
+            ch = await get_channel(s["channel_id"])
+            name = ch["name"] if ch else f"Kanal ID {s['channel_id']}"
+            text += f"- {name} | {s['price']} Stars | {s['created_at']}\n"
+    else:
+        text += "Satın alma geçmişi yok.\n"
+
+    text += "\nÜyelikler:\n"
+
+    if subs.data:
+        for sub in subs.data:
+            ch = await get_channel(sub["channel_id"])
+            name = ch["name"] if ch else f"Kanal ID {sub['channel_id']}"
+            text += f"- {name} | {sub['status']} | Bitiş: {sub['end_date']}\n"
+    else:
+        text += "Üyelik geçmişi yok."
+
+    await message.reply_text(text)
+
 
 async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = context.user_data.get("mode")
@@ -558,38 +621,30 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if mode == "add_channel":
             parts = text.split("|")
-
             if len(parts) < 4:
                 await update.message.reply_text(
                     "❌ Format yanlış.\n\n"
-                    "Şöyle yaz:\n"
                     "KanalAdı | Fiyat | ChatID | SüreGün | Açıklama\n\n"
-                    "Örnek:\n"
-                    "VIP | 2500 | -1001234567890 | 30 | Günlük VIP kanal"
+                    "Örnek:\nVIP | 2500 | -1001234567890 | 30 | Günlük VIP kanal"
                 )
                 return
 
-            name = parts[0].strip()
-            price = int(parts[1].strip())
-            chat_id = parts[2].strip()
-            duration = int(parts[3].strip())
-            description = parts[4].strip() if len(parts) >= 5 else None
+            payload = {
+                "name": parts[0].strip(),
+                "price": int(parts[1].strip()),
+                "chat_id": parts[2].strip(),
+                "duration_days": int(parts[3].strip()),
+                "description": parts[4].strip() if len(parts) >= 5 else None,
+                "photo_url": None,
+                "invite_link": "",
+                "active": True,
+            }
 
-            supabase.table("channels").insert(
-                {
-                    "name": name,
-                    "price": price,
-                    "chat_id": chat_id,
-                    "invite_link": "",
-                    "duration_days": duration,
-                    "description": description,
-                    "photo_url": None,
-                    "active": True,
-                }
-            ).execute()
+            supabase.table("channels").insert(payload).execute()
+            await log_event("channel_added", user_id, channel_id=None, details=str(payload))
 
             context.user_data.clear()
-            await update.message.reply_text(f"✅ Kanal eklendi: {name} / {price} Stars / {duration} gün")
+            await update.message.reply_text(f"✅ Kanal eklendi: {payload['name']}")
 
         elif mode in ["edit_price", "edit_duration", "edit_chat", "edit_description", "edit_photo"]:
             channel_id = context.user_data.get("channel_id")
@@ -606,6 +661,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 field, value, reply = "photo_url", None if text == "-" else text, "✅ Görsel URL güncellendi."
 
             supabase.table("channels").update({field: value}).eq("id", channel_id).execute()
+            await log_event("channel_updated", user_id, channel_id=channel_id, details=f"{field}={value}")
 
             context.user_data.clear()
             await update.message.reply_text(reply)
@@ -615,31 +671,92 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
 
         elif mode == "add_coupon":
-            parts = text.split()
-
-            if len(parts) < 4:
+            parts = text.split("|")
+            if len(parts) < 5:
                 await update.message.reply_text(
                     "❌ Format yanlış.\n\n"
-                    "Şöyle yaz:\n"
-                    "KOD Yüzdeİndirim SabitStarsİndirim MaxKullanım\n\n"
-                    "Örnek:\n"
-                    "PASHA50 50 0 100"
+                    "KOD | Yüzdeİndirim | SabitStarsİndirim | MaxKullanım | KanalID\n\n"
+                    "Örnek:\nPASHA50 | 50 | 0 | 100 | 0\n\n"
+                    "KanalID 0 olursa tüm kanallarda geçerli olur."
                 )
                 return
 
+            channel_id = int(parts[4].strip())
+            channel_value = None if channel_id == 0 else channel_id
+
             supabase.table("coupons").insert(
                 {
-                    "code": parts[0].upper(),
-                    "discount_percent": int(parts[1]),
-                    "discount_stars": int(parts[2]),
-                    "max_uses": int(parts[3]),
+                    "code": parts[0].strip().upper(),
+                    "discount_percent": int(parts[1].strip()),
+                    "discount_stars": int(parts[2].strip()),
+                    "max_uses": int(parts[3].strip()),
                     "used_count": 0,
+                    "channel_id": channel_value,
                     "active": True,
                 }
             ).execute()
 
+            await log_event("coupon_added", user_id, details=text)
+
             context.user_data.clear()
-            await update.message.reply_text(f"✅ Kupon oluşturuldu: {parts[0].upper()}")
+            await update.message.reply_text("✅ Kupon oluşturuldu.")
+
+        elif mode == "add_faq":
+            parts = text.split("|")
+            if len(parts) < 2:
+                await update.message.reply_text("❌ Format: Soru | Cevap")
+                return
+
+            supabase.table("faq").insert(
+                {
+                    "question": parts[0].strip(),
+                    "answer": parts[1].strip(),
+                    "active": True,
+                }
+            ).execute()
+
+            await log_event("faq_added", user_id, details=text)
+
+            context.user_data.clear()
+            await update.message.reply_text("✅ SSS eklendi.")
+
+        elif mode == "add_admin":
+            parts = text.split("|")
+            if len(parts) < 2:
+                await update.message.reply_text("❌ Format: UserID | role\nRole: manager veya viewer")
+                return
+
+            target_id = int(parts[0].strip())
+            role = parts[1].strip().lower()
+
+            if role not in ["manager", "viewer"]:
+                await update.message.reply_text("❌ Role sadece manager veya viewer olabilir.")
+                return
+
+            existing = supabase.table("admins").select("*").eq("user_id", target_id).execute()
+            if existing.data:
+                supabase.table("admins").update({"role": role, "active": True}).eq("user_id", target_id).execute()
+            else:
+                supabase.table("admins").insert({"user_id": target_id, "role": role, "active": True}).execute()
+
+            await log_event("admin_added", user_id, target_user_id=target_id, details=role)
+
+            context.user_data.clear()
+            await update.message.reply_text("✅ Admin eklendi.")
+
+        elif mode == "blacklist_reason":
+            target_id = context.user_data.get("target_user_id")
+            existing = supabase.table("blacklist").select("*").eq("user_id", target_id).execute()
+
+            if existing.data:
+                supabase.table("blacklist").update({"reason": text, "active": True}).eq("user_id", target_id).execute()
+            else:
+                supabase.table("blacklist").insert({"user_id": target_id, "reason": text, "active": True}).execute()
+
+            await log_event("blacklisted", user_id, target_user_id=target_id, details=text)
+
+            context.user_data.clear()
+            await update.message.reply_text("✅ Kullanıcı kara listeye alındı.")
 
         elif mode == "custom_grant_days":
             target_user_id = context.user_data.get("target_user_id")
@@ -647,14 +764,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             days = int(text)
 
             context.user_data.clear()
-
-            await grant_vip_to_user(
-                update.message,
-                context,
-                target_user_id,
-                channel_id,
-                custom_days=days,
-            )
+            await grant_vip_to_user(update.message, context, target_user_id, channel_id, custom_days=days)
 
         elif mode == "user_coupon":
             code = text.upper()
@@ -679,6 +789,11 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Kupon uygulandı: {code}")
 
         elif mode == "user_support":
+            if await is_blacklisted(user_id):
+                context.user_data.clear()
+                await update.message.reply_text("🚫 Destek talebi oluşturamazsın.")
+                return
+
             supabase.table("support_requests").insert(
                 {
                     "user_id": user_id,
@@ -689,14 +804,12 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ).execute()
 
             context.user_data.clear()
-
             await update.message.reply_text("✅ Destek talebin admin’e gönderildi.")
+            await log_event("support_created", user_id, target_user_id=user_id, details=text)
 
             await context.bot.send_message(
-                ADMIN_ID,
-                f"🆘 Yeni destek talebi!\n\n"
-                f"Kullanıcı: @{safe_username(user) or 'yok'}\n"
-                f"ID: {user_id}\n\n{text}",
+                OWNER_ID,
+                f"🆘 Yeni destek talebi!\n\nKullanıcı: @{safe_username(user) or 'yok'}\nID: {user_id}\n\n{text}",
             )
 
         elif mode == "broadcast":
@@ -708,25 +821,19 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ İşlem sırasında hata oldu. Formatı kontrol et.")
 
 
-# =========================
-# CALLBACK ROUTER
-# =========================
-
 async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
+    user_id = query.from_user.id
 
     if data == "accept_terms":
-        supabase.table("users").update(
-            {"accepted_terms": True}
-        ).eq("user_id", query.from_user.id).execute()
+        supabase.table("users").update({"accepted_terms": True}).eq("user_id", user_id).execute()
+        await query.message.reply_text("✅ Kuralları kabul ettin. Menüden devam edebilirsin.", reply_markup=MAIN_MENU)
+        return
 
-        await query.message.reply_text(
-            "✅ Kuralları kabul ettin. Menüden devam edebilirsin.",
-            reply_markup=MAIN_MENU,
-        )
+    if data.startswith("preview_"):
+        await show_channel_preview(query.message, int(data.split("_")[1]), user_id)
         return
 
     if data.startswith("buy_"):
@@ -741,36 +848,37 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await request_cancel_from_button(query, context)
         return
 
+    if data.startswith("faq_view_"):
+        await faq_answer(query.message, int(data.split("_")[2]))
+        return
+
     if data.startswith("cancel_"):
         await handle_cancel_admin(query, context)
         return
 
     if data.startswith("support_close_"):
-        if not is_admin(query.from_user.id):
+        if not can_manage(user_id):
             await query.message.reply_text("❌ Yetkin yok.")
             return
-
         request_id = int(data.split("_")[2])
-
-        supabase.table("support_requests").update(
-            {"status": "closed"}
-        ).eq("id", request_id).execute()
-
+        supabase.table("support_requests").update({"status": "closed"}).eq("id", request_id).execute()
+        await log_event("support_closed", user_id, details=f"request_id={request_id}")
         await query.message.reply_text("✅ Destek talebi kapatıldı.")
         return
 
-    if not is_admin(query.from_user.id):
+    if not is_admin(user_id):
         await query.message.reply_text("❌ Yetkin yok.")
         return
 
     if data == "admin_add":
+        if not can_manage(user_id):
+            await query.message.reply_text("❌ Yetkin yok.")
+            return
         context.user_data["mode"] = "add_channel"
-
         await query.message.reply_text(
             "➕ Kanal bilgilerini yaz:\n\n"
             "KanalAdı | Fiyat | ChatID | SüreGün | Açıklama\n\n"
-            "Örnek:\n"
-            "VIP | 2500 | -1001234567890 | 30 | Günlük VIP kanal"
+            "Örnek:\nVIP | 2500 | -1001234567890 | 30 | Günlük VIP kanal"
         )
 
     elif data == "admin_list":
@@ -796,26 +904,39 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await coupons_message(query.message)
 
     elif data == "coupon_add":
+        if not can_manage(user_id):
+            await query.message.reply_text("❌ Yetkin yok.")
+            return
         context.user_data["mode"] = "add_coupon"
         await query.message.reply_text(
             "🎟️ Kupon oluştur:\n\n"
-            "KOD Yüzdeİndirim SabitStarsİndirim MaxKullanım\n\n"
-            "Örnek:\n"
-            "PASHA50 50 0 100"
+            "KOD | Yüzdeİndirim | SabitStarsİndirim | MaxKullanım | KanalID\n\n"
+            "Örnek:\nPASHA50 | 50 | 0 | 100 | 0"
         )
 
     elif data.startswith("coupon_toggle_"):
         coupon_id = int(data.split("_")[2])
-
         result = supabase.table("coupons").select("*").eq("id", coupon_id).single().execute()
         coupon = result.data
-
         if coupon:
-            supabase.table("coupons").update(
-                {"active": not bool(coupon.get("active"))}
-            ).eq("id", coupon_id).execute()
-
+            supabase.table("coupons").update({"active": not bool(coupon.get("active"))}).eq("id", coupon_id).execute()
+        await log_event("coupon_toggled", user_id, details=f"coupon_id={coupon_id}")
         await query.message.reply_text("✅ Kupon durumu değiştirildi.")
+
+    elif data == "admin_faq":
+        await faq_admin_message(query.message)
+
+    elif data == "faq_add":
+        context.user_data["mode"] = "add_faq"
+        await query.message.reply_text("❓ SSS ekle:\n\nSoru | Cevap")
+
+    elif data.startswith("faq_toggle_"):
+        faq_id = int(data.split("_")[2])
+        result = supabase.table("faq").select("*").eq("id", faq_id).single().execute()
+        item = result.data
+        if item:
+            supabase.table("faq").update({"active": not bool(item.get("active"))}).eq("id", faq_id).execute()
+        await query.message.reply_text("✅ SSS durumu değiştirildi.")
 
     elif data == "admin_broadcast":
         context.user_data["mode"] = "broadcast"
@@ -823,15 +944,14 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_channel_id_help":
         await query.message.reply_text(
-            "🆔 Kanal ID alma yöntemi:\n\n"
+            "🆔 Kanal ID alma:\n\n"
             "1. Botu VIP kanala yönetici yap.\n"
-            "2. Botta şu yetkiler açık olsun:\n"
-            "   ✅ Mesaj gönder\n"
-            "   ✅ Kullanıcı davet et\n"
-            "   ✅ Kullanıcı yasakla\n\n"
+            "2. Şu yetkileri aç:\n"
+            "✅ Mesaj gönder\n"
+            "✅ Kullanıcı davet et\n"
+            "✅ Kullanıcı yasakla\n\n"
             "3. VIP kanalın içine sadece şu kelimeyi yaz:\n\n"
-            "id\n\n"
-            "Bot sana -100 ile başlayan Chat ID verecek."
+            "id"
         )
 
     elif data == "admin_support":
@@ -840,11 +960,40 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_cancel":
         await cancel_requests_message(query.message)
 
+    elif data == "admin_blacklist":
+        await blacklist_message(query.message)
+
+    elif data == "admin_admins":
+        await admins_message(query.message)
+
+    elif data == "admin_add_admin":
+        if not is_owner(user_id):
+            await query.message.reply_text("❌ Sadece owner admin ekleyebilir.")
+            return
+        context.user_data["mode"] = "add_admin"
+        await query.message.reply_text("👮 Admin ekle:\n\nUserID | role\n\nRole: manager veya viewer")
+
+    elif data.startswith("admin_toggle_"):
+        if not is_owner(user_id):
+            await query.message.reply_text("❌ Yetkin yok.")
+            return
+        target_id = int(data.split("_")[2])
+        result = supabase.table("admins").select("*").eq("user_id", target_id).single().execute()
+        row = result.data
+        if row:
+            supabase.table("admins").update({"active": not bool(row.get("active"))}).eq("user_id", target_id).execute()
+        await log_event("admin_toggled", user_id, target_user_id=target_id)
+        await query.message.reply_text("✅ Admin durumu değiştirildi.")
+
+    elif data == "admin_logs":
+        await logs_message(query.message)
+
     elif data == "admin_export_sales":
         await export_sales_csv(query.message)
 
     elif data == "admin_maintenance":
         set_setting("maintenance", "off" if maintenance_on() else "on")
+        await log_event("maintenance_toggled", user_id)
         await query.message.reply_text("✅ Bakım modu değiştirildi.")
         await open_admin_panel(query.message)
 
@@ -855,8 +1004,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_channel_admin_button(query, context)
 
     elif data.startswith("grant_user_"):
-        target_user_id = int(data.split("_")[2])
-        await show_channels_for_grant(query.message, target_user_id)
+        await show_channels_for_grant(query.message, int(data.split("_")[2]))
 
     elif data.startswith("grant_channel_"):
         parts = data.split("_")
@@ -864,65 +1012,67 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("grant_days_"):
         parts = data.split("_")
-
-        await grant_vip_to_user(
-            query.message,
-            context,
-            int(parts[2]),
-            int(parts[3]),
-            custom_days=int(parts[4]),
-        )
+        await grant_vip_to_user(query.message, context, int(parts[2]), int(parts[3]), custom_days=int(parts[4]))
 
     elif data.startswith("grant_custom_"):
         parts = data.split("_")
-
         context.user_data["mode"] = "custom_grant_days"
         context.user_data["target_user_id"] = int(parts[2])
         context.user_data["channel_id"] = int(parts[3])
-
         await query.message.reply_text("⏳ Kaç günlük VIP vermek istiyorsun? Örnek: 14")
 
     elif data.startswith("userdetail_"):
         await show_user_detail_by_id(query.message, int(data.split("_")[1]))
 
     elif data.startswith("usub_cancel_"):
-        sub_id = int(data.split("_")[2])
-        await admin_cancel_subscription(query.message, context, sub_id)
+        await admin_cancel_subscription(query.message, context, int(data.split("_")[2]))
 
     elif data.startswith("usub_link_"):
-        sub_id = int(data.split("_")[2])
-        await admin_resend_link_for_subscription(query.message, context, sub_id)
+        await admin_resend_link_for_subscription(query.message, context, int(data.split("_")[2]))
 
     elif data.startswith("usub_extend_"):
         parts = data.split("_")
         await admin_extend_subscription(query.message, int(parts[2]), int(parts[3]))
 
+    elif data.startswith("refund_sale_"):
+        sale_id = int(data.split("_")[2])
+        await mark_refund(query.message, user_id, sale_id)
 
-# =========================
-# CHANNEL ADMIN
-# =========================
+    elif data.startswith("blacklist_"):
+        target_id = int(data.split("_")[1])
+        context.user_data["mode"] = "blacklist_reason"
+        context.user_data["target_user_id"] = target_id
+        await query.message.reply_text("🚫 Kara liste sebebini yaz:")
+
+    elif data.startswith("unblacklist_"):
+        target_id = int(data.split("_")[1])
+        supabase.table("blacklist").update({"active": False}).eq("user_id", target_id).execute()
+        await log_event("unblacklisted", user_id, target_user_id=target_id)
+        await query.message.reply_text("✅ Kullanıcı kara listeden çıkarıldı.")
+
 
 async def handle_channel_admin_button(query, context):
+    user_id = query.from_user.id
+
+    if not can_manage(user_id):
+        await query.message.reply_text("❌ Yetkin yok.")
+        return
+
     data = query.data
 
     if data.startswith("ch_delete_"):
         channel_id = int(data.split("_")[2])
-
         supabase.table("channels").delete().eq("id", channel_id).execute()
-
+        await log_event("channel_deleted", user_id, channel_id=channel_id)
         await query.message.reply_text(f"✅ Kanal silindi. ID: {channel_id}")
 
     elif data.startswith("ch_toggle_"):
         channel_id = int(data.split("_")[2])
-
         result = supabase.table("channels").select("*").eq("id", channel_id).single().execute()
         ch = result.data
-
         if ch:
-            supabase.table("channels").update(
-                {"active": not bool(ch.get("active"))}
-            ).eq("id", channel_id).execute()
-
+            supabase.table("channels").update({"active": not bool(ch.get("active"))}).eq("id", channel_id).execute()
+            await log_event("channel_toggled", user_id, channel_id=channel_id)
         await query.message.reply_text("✅ Kanal aktif/pasif durumu değiştirildi.")
 
     else:
@@ -939,10 +1089,8 @@ async def handle_channel_admin_button(query, context):
         }
 
         mode, prompt = mode_map[action]
-
         context.user_data["mode"] = mode
         context.user_data["channel_id"] = channel_id
-
         await query.message.reply_text(prompt)
 
 
@@ -969,9 +1117,7 @@ async def list_channels_manage(message):
                 InlineKeyboardButton("🖼️ Görsel", callback_data=f"ch_photo_{ch['id']}"),
                 InlineKeyboardButton("Aç/Kapat", callback_data=f"ch_toggle_{ch['id']}"),
             ],
-            [
-                InlineKeyboardButton("🗑️ Sil", callback_data=f"ch_delete_{ch['id']}"),
-            ],
+            [InlineKeyboardButton("🗑️ Sil", callback_data=f"ch_delete_{ch['id']}")],
         ]
 
         await message.reply_text(
@@ -987,10 +1133,6 @@ async def list_channels_manage(message):
         )
 
 
-# =========================
-# USERS / GRANT
-# =========================
-
 async def show_users_for_grant(message):
     data = supabase.table("users").select("*").order("id", desc=True).limit(20).execute()
 
@@ -1002,12 +1144,8 @@ async def show_users_for_grant(message):
         username = f"@{u['username']}" if u.get("username") else "username yok"
 
         keyboard = [
-            [
-                InlineKeyboardButton("👁️ Detay", callback_data=f"userdetail_{u['user_id']}"),
-            ],
-            [
-                InlineKeyboardButton("🎁 VIP Ver", callback_data=f"grant_user_{u['user_id']}"),
-            ],
+            [InlineKeyboardButton("👁️ Detay", callback_data=f"userdetail_{u['user_id']}")],
+            [InlineKeyboardButton("🎁 VIP Ver", callback_data=f"grant_user_{u['user_id']}")],
         ]
 
         await message.reply_text(
@@ -1017,27 +1155,14 @@ async def show_users_for_grant(message):
 
 
 async def show_channels_for_grant(message, target_user_id):
-    data = (
-        supabase.table("channels")
-        .select("*")
-        .eq("active", True)
-        .order("id")
-        .execute()
-    )
+    data = supabase.table("channels").select("*").eq("active", True).order("id").execute()
 
     if not data.data:
         await message.reply_text("📢 Önce kanal eklemelisin.")
         return
 
     for ch in data.data:
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    f"🎁 {ch['name']} seç",
-                    callback_data=f"grant_channel_{target_user_id}_{ch['id']}",
-                )
-            ]
-        ]
+        keyboard = [[InlineKeyboardButton(f"🎁 {ch['name']} seç", callback_data=f"grant_channel_{target_user_id}_{ch['id']}")]]
 
         await message.reply_text(
             f"📢 Kanal seç\n\n"
@@ -1060,10 +1185,7 @@ async def show_grant_duration(message, target_user_id, channel_id):
         ],
     ]
 
-    await message.reply_text(
-        "⏳ VIP süresini seç:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    await message.reply_text("⏳ VIP süresini seç:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def grant_vip_to_user(message, context, target_user_id, channel_id, custom_days=None):
@@ -1075,12 +1197,7 @@ async def grant_vip_to_user(message, context, target_user_id, channel_id, custom
 
     duration_days = int(custom_days or ch.get("duration_days") or DEFAULT_DURATION_DAYS)
 
-    start_date, end_date = await upsert_subscription(
-        target_user_id,
-        channel_id,
-        duration_days,
-        0,
-    )
+    start_date, end_date = await upsert_subscription(target_user_id, channel_id, duration_days, 0)
 
     vip_link = await safe_create_and_store_link(context, target_user_id, channel_id, ch)
 
@@ -1095,6 +1212,8 @@ async def grant_vip_to_user(message, context, target_user_id, channel_id, custom
         }
     ).execute()
 
+    await log_event("vip_granted", message.chat_id, target_user_id, channel_id, f"{duration_days} gün")
+
     if vip_link:
         try:
             await context.bot.send_message(
@@ -1105,19 +1224,11 @@ async def grant_vip_to_user(message, context, target_user_id, channel_id, custom
                 f"Başlangıç: {start_date}\n"
                 f"Bitiş: {end_date}",
             )
-
             await message.reply_text("✅ VIP yetki verildi ve link kullanıcıya gönderildi.")
-
         except Exception:
-            await message.reply_text(
-                f"✅ VIP yetki verildi ama kullanıcıya mesaj gönderilemedi.\n\n"
-                f"Linki manuel gönder:\n{vip_link}"
-            )
+            await message.reply_text(f"✅ VIP yetki verildi ama kullanıcıya mesaj gönderilemedi.\n\nLinki manuel gönder:\n{vip_link}")
     else:
-        await message.reply_text(
-            "✅ VIP yetki verildi ama davet linki üretilemedi.\n\n"
-            "Botun kanalda admin ve davet yetkisi olduğundan emin ol."
-        )
+        await message.reply_text("✅ VIP yetki verildi ama davet linki üretilemedi.")
 
 
 async def upsert_subscription(user_id, channel_id, duration_days, price):
@@ -1179,34 +1290,31 @@ async def safe_create_and_store_link(context, user_id, channel_id, ch):
             ).eq("user_id", int(user_id)).eq("channel_id", int(channel_id)).eq("status", "active").execute()
 
         return vip_link
-
     except Exception as e:
         logger.error("Link üretilemedi: %s", e)
         return None
 
 
-# =========================
-# COUPONS / PRICE
-# =========================
-
 async def get_coupon(code):
     if not code:
         return None
 
-    try:
-        result = supabase.table("coupons").select("*").eq("code", code.upper()).execute()
-        return result.data[0] if result.data else None
-    except Exception:
-        return None
+    result = supabase.table("coupons").select("*").eq("code", code.upper()).execute()
+    return result.data[0] if result.data else None
 
 
-async def calculate_price(user_id, base_price):
+async def calculate_price(user_id, base_price, channel_id):
     user_row = await get_user_row(user_id)
     code = user_row.get("active_coupon") if user_row else None
 
     coupon = await get_coupon(code) if code else None
 
     if not coupon or not coupon.get("active"):
+        return base_price, None, None
+
+    coupon_channel = coupon.get("channel_id")
+
+    if coupon_channel and int(coupon_channel) != int(channel_id):
         return base_price, None, None
 
     max_uses = int(coupon.get("max_uses") or 0)
@@ -1229,17 +1337,16 @@ async def calculate_price(user_id, base_price):
     final = max(final, 1)
 
     discount_text = f"%{percent} indirim" if percent > 0 else f"{stars} Stars indirim"
-
     return final, code.upper(), discount_text
 
-
-# =========================
-# PAYMENT
-# =========================
 
 async def handle_buy(query, context):
     if maintenance_on() and not is_admin(query.from_user.id):
         await query.message.reply_text("🔧 Bot bakım modunda. Satın alma geçici olarak kapalı.")
+        return
+
+    if await is_blacklisted(query.from_user.id) and not is_admin(query.from_user.id):
+        await query.message.reply_text("🚫 Satın alma yetkin kısıtlandı.")
         return
 
     channel_id = int(query.data.split("_")[1])
@@ -1249,7 +1356,7 @@ async def handle_buy(query, context):
         await query.message.reply_text("❌ Kanal bulunamadı veya pasif.")
         return
 
-    final_price, coupon_code, _ = await calculate_price(query.from_user.id, int(ch["price"]))
+    final_price, coupon_code, _ = await calculate_price(query.from_user.id, int(ch["price"]), channel_id)
     payload = f"vip_{channel_id}_{final_price}_{coupon_code or 'NONE'}"
 
     await context.bot.send_invoice(
@@ -1259,12 +1366,7 @@ async def handle_buy(query, context):
         payload=payload,
         provider_token="",
         currency="XTR",
-        prices=[
-            LabeledPrice(
-                label=ch["name"],
-                amount=final_price,
-            )
-        ],
+        prices=[LabeledPrice(label=ch["name"], amount=final_price)],
     )
 
 
@@ -1275,7 +1377,6 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = update.message.successful_payment.invoice_payload
     user = update.effective_user
-
     parts = payload.split("_", 3)
 
     channel_id = int(parts[1])
@@ -1305,12 +1406,14 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "price": paid_price,
             "payment_payload": payload,
             "coupon_code": coupon_code,
+            "refund_status": "none",
         }
     ).execute()
 
+    await log_event("payment_success", user.id, user.id, channel_id, f"{paid_price} Stars")
+
     if coupon_code:
         coupon = await get_coupon(coupon_code)
-
         if coupon:
             supabase.table("coupons").update(
                 {"used_count": int(coupon.get("used_count") or 0) + 1}
@@ -1319,7 +1422,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         supabase.table("users").update({"active_coupon": None}).eq("user_id", user.id).execute()
 
     await context.bot.send_message(
-        ADMIN_ID,
+        OWNER_ID,
         f"✅ Yeni satış!\n\n"
         f"Kullanıcı: @{safe_username(user) or 'yok'}\n"
         f"User ID: {user.id}\n"
@@ -1339,21 +1442,8 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"Bitiş: {end_date}"
         )
     else:
-        await update.message.reply_text(
-            "✅ Ödeme başarılı fakat otomatik davet linki üretilemedi. Admin ile iletişime geç."
-        )
+        await update.message.reply_text("✅ Ödeme başarılı fakat otomatik davet linki üretilemedi. Admin ile iletişime geç.")
 
-        await context.bot.send_message(
-            ADMIN_ID,
-            f"⚠️ Davet linki üretilemedi!\n\n"
-            f"Kullanıcı ID: {user.id}\n"
-            f"Kanal: {ch['name']}",
-        )
-
-
-# =========================
-# SUBSCRIPTION ACTIONS
-# =========================
 
 async def resend_invite_link(query, context):
     sub_id = int(query.data.split("_")[1])
@@ -1424,18 +1514,17 @@ async def create_cancel_request_for_sub(message, context, sub):
         }
     ).execute()
 
-    await message.reply_text("✅ İptal talebin admin onayına gönderildi.")
+    await log_event("cancel_requested", sub["user_id"], sub["user_id"], sub["channel_id"])
 
+    await message.reply_text("✅ İptal talebin admin onayına gönderildi.")
     await context.bot.send_message(
-        ADMIN_ID,
-        f"❌ Yeni iptal talebi!\n\n"
-        f"Kullanıcı ID: {sub['user_id']}\n"
-        f"Kanal ID: {sub['channel_id']}",
+        OWNER_ID,
+        f"❌ Yeni iptal talebi!\n\nKullanıcı ID: {sub['user_id']}\nKanal ID: {sub['channel_id']}",
     )
 
 
 async def handle_cancel_admin(query, context):
-    if not is_admin(query.from_user.id):
+    if not can_manage(query.from_user.id):
         await query.message.reply_text("❌ Yetkin yok.")
         return
 
@@ -1443,14 +1532,7 @@ async def handle_cancel_admin(query, context):
     action = parts[1]
     request_id = int(parts[2])
 
-    result = (
-        supabase.table("cancel_requests")
-        .select("*")
-        .eq("id", request_id)
-        .single()
-        .execute()
-    )
-
+    result = supabase.table("cancel_requests").select("*").eq("id", request_id).single().execute()
     req = result.data
 
     if not req:
@@ -1460,16 +1542,13 @@ async def handle_cancel_admin(query, context):
     ch = await get_channel(req["channel_id"])
 
     if action == "ok":
-        supabase.table("cancel_requests").update(
-            {"status": "approved"}
-        ).eq("id", request_id).execute()
-
-        supabase.table("subscriptions").update(
-            {"status": "cancelled"}
-        ).eq("user_id", req["user_id"]).eq("channel_id", req["channel_id"]).execute()
+        supabase.table("cancel_requests").update({"status": "approved"}).eq("id", request_id).execute()
+        supabase.table("subscriptions").update({"status": "cancelled"}).eq("user_id", req["user_id"]).eq("channel_id", req["channel_id"]).execute()
 
         if ch:
             await remove_user_from_channel(context, ch, req["user_id"])
+
+        await log_event("cancel_approved", query.from_user.id, req["user_id"], req["channel_id"])
 
         await query.message.reply_text("✅ İptal talebi onaylandı.")
 
@@ -1479,10 +1558,8 @@ async def handle_cancel_admin(query, context):
             pass
 
     elif action == "no":
-        supabase.table("cancel_requests").update(
-            {"status": "rejected"}
-        ).eq("id", request_id).execute()
-
+        supabase.table("cancel_requests").update({"status": "rejected"}).eq("id", request_id).execute()
+        await log_event("cancel_rejected", query.from_user.id, req["user_id"], req["channel_id"])
         await query.message.reply_text("❌ İptal talebi reddedildi.")
 
         try:
@@ -1500,12 +1577,12 @@ async def admin_cancel_subscription(message, context, sub_id):
 
     ch = await get_channel(sub["channel_id"])
 
-    supabase.table("subscriptions").update(
-        {"status": "cancelled"}
-    ).eq("id", sub_id).execute()
+    supabase.table("subscriptions").update({"status": "cancelled"}).eq("id", sub_id).execute()
 
     if ch:
         await remove_user_from_channel(context, ch, sub["user_id"])
+
+    await log_event("subscription_cancelled_by_admin", message.chat_id, sub["user_id"], sub["channel_id"])
 
     await message.reply_text("✅ Üyelik iptal edildi.")
 
@@ -1552,9 +1629,24 @@ async def admin_extend_subscription(message, sub_id, days):
     await message.reply_text(f"✅ Üyelik {days} gün uzatıldı. Yeni bitiş: {new_end.isoformat()}")
 
 
-# =========================
-# REPORTS / USERS / COUPONS
-# =========================
+async def mark_refund(message, admin_id, sale_id):
+    sale = supabase.table("sales").select("*").eq("id", sale_id).single().execute().data
+
+    if not sale:
+        await message.reply_text("❌ Satış bulunamadı.")
+        return
+
+    supabase.table("sales").update(
+        {
+            "refund_status": "refunded",
+            "refunded_at": now_utc().isoformat(),
+            "refunded_by": admin_id,
+        }
+    ).eq("id", sale_id).execute()
+
+    await log_event("refund_marked", admin_id, sale.get("user_id"), sale.get("channel_id"), f"sale_id={sale_id}")
+    await message.reply_text("💸 Satış iade edildi olarak işaretlendi.\n\nNot: Bu sadece sistem içi işarettir; Telegram Stars iadesini otomatik yapmaz.")
+
 
 async def sales_message(message):
     data = supabase.table("sales").select("*").order("id", desc=True).limit(20).execute()
@@ -1563,20 +1655,26 @@ async def sales_message(message):
         await message.reply_text("📊 Henüz satış yok.")
         return
 
-    text = "📊 Son kayıtlar:\n\n"
-
     for s in data.data:
-        text += (
+        refund_status = s.get("refund_status") or "none"
+
+        keyboard = []
+
+        if refund_status != "refunded":
+            keyboard.append([InlineKeyboardButton("💸 İade İşaretle", callback_data=f"refund_sale_{s['id']}")])
+
+        await message.reply_text(
+            f"📊 Satış\n\n"
             f"ID: {s['id']}\n"
             f"Kullanıcı: @{s.get('username') or 'yok'}\n"
             f"User ID: {s['user_id']}\n"
             f"Kanal ID: {s['channel_id']}\n"
             f"Fiyat: {s['price']} ⭐\n"
             f"Kupon: {s.get('coupon_code') or 'Yok'}\n"
-            f"Tarih: {s['created_at']}\n\n"
+            f"İade: {refund_status}\n"
+            f"Tarih: {s['created_at']}",
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
         )
-
-    await message.reply_text(text)
 
 
 async def report_message(message):
@@ -1589,16 +1687,15 @@ async def report_message(message):
     today = now_utc().date().isoformat()
     month = now_utc().strftime("%Y-%m")
 
-    today_count = 0
-    today_stars = 0
-    month_count = 0
-    month_stars = 0
-    total_count = 0
-    total_stars = 0
+    today_count = today_stars = month_count = month_stars = total_count = total_stars = refunded_count = 0
 
     for s in data.data:
         price = int(s.get("price") or 0)
         created = str(s.get("created_at") or "")
+
+        if s.get("refund_status") == "refunded":
+            refunded_count += 1
+            continue
 
         total_count += 1
         total_stars += price
@@ -1618,7 +1715,8 @@ async def report_message(message):
         f"Bu ay satış: {month_count}\n"
         f"Bu ay Stars: {month_stars}\n\n"
         f"Toplam satış: {total_count}\n"
-        f"Toplam Stars: {total_stars}"
+        f"Toplam Stars: {total_stars}\n"
+        f"İade işaretli satış: {refunded_count}"
     )
 
 
@@ -1632,13 +1730,12 @@ async def channel_stats_message(message):
     stats = {}
 
     for s in sales.data:
-        cid = s["channel_id"]
+        if s.get("refund_status") == "refunded":
+            continue
 
+        cid = s["channel_id"]
         if cid not in stats:
-            stats[cid] = {
-                "count": 0,
-                "stars": 0,
-            }
+            stats[cid] = {"count": 0, "stars": 0}
 
         stats[cid]["count"] += 1
         stats[cid]["stars"] += int(s.get("price") or 0)
@@ -1647,25 +1744,15 @@ async def channel_stats_message(message):
 
     for cid, val in stats.items():
         ch = await get_channel(cid)
-        ch_name = ch["name"] if ch else f"Kanal ID {cid}"
+        name = ch["name"] if ch else f"Kanal ID {cid}"
 
-        text += (
-            f"📢 {ch_name}\n"
-            f"Satış: {val['count']}\n"
-            f"Stars: {val['stars']}\n\n"
-        )
+        text += f"📢 {name}\nSatış: {val['count']}\nStars: {val['stars']}\n\n"
 
     await message.reply_text(text)
 
 
 async def users_message(message):
-    data = (
-        supabase.table("users")
-        .select("*")
-        .order("id", desc=True)
-        .limit(30)
-        .execute()
-    )
+    data = supabase.table("users").select("*").order("id", desc=True).limit(30).execute()
 
     if not data.data:
         await message.reply_text("👥 Henüz kullanıcı yok.")
@@ -1675,12 +1762,8 @@ async def users_message(message):
         username = f"@{u['username']}" if u.get("username") else "username yok"
 
         keyboard = [
-            [
-                InlineKeyboardButton("👁️ Detay", callback_data=f"userdetail_{u['user_id']}"),
-            ],
-            [
-                InlineKeyboardButton("🎁 VIP Ver", callback_data=f"grant_user_{u['user_id']}"),
-            ],
+            [InlineKeyboardButton("👁️ Detay", callback_data=f"userdetail_{u['user_id']}")],
+            [InlineKeyboardButton("🎁 VIP Ver", callback_data=f"grant_user_{u['user_id']}")],
         ]
 
         await message.reply_text(
@@ -1719,26 +1802,29 @@ async def show_user_detail(message, user_row):
     user_id = user_row["user_id"]
     username = f"@{user_row['username']}" if user_row.get("username") else "username yok"
 
-    await message.reply_text(f"👤 Kullanıcı Detayı\n\nID: {user_id}\nUsername: {username}")
+    blacklisted = await is_blacklisted(user_id)
+
+    keyboard_top = [
+        [InlineKeyboardButton("🎁 VIP Ver", callback_data=f"grant_user_{user_id}")],
+        [InlineKeyboardButton("🚫 Kara Listeye Al", callback_data=f"blacklist_{user_id}")]
+        if not blacklisted
+        else [InlineKeyboardButton("✅ Kara Listeden Çıkar", callback_data=f"unblacklist_{user_id}")],
+    ]
+
+    await message.reply_text(
+        f"👤 Kullanıcı Detayı\n\nID: {user_id}\nUsername: {username}\nKara liste: {'Evet' if blacklisted else 'Hayır'}",
+        reply_markup=InlineKeyboardMarkup(keyboard_top),
+    )
 
     subs = supabase.table("subscriptions").select("*").eq("user_id", user_id).execute()
 
     if not subs.data:
-        await message.reply_text(
-            "Üyelik yok.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("🎁 VIP Ver", callback_data=f"grant_user_{user_id}"),
-                    ]
-                ]
-            ),
-        )
+        await message.reply_text("Üyelik yok.")
         return
 
     for sub in subs.data:
         ch = await get_channel(sub["channel_id"])
-        ch_name = ch["name"] if ch else f"Kanal ID {sub['channel_id']}"
+        name = ch["name"] if ch else f"Kanal ID {sub['channel_id']}"
 
         keyboard = [
             [
@@ -1749,15 +1835,10 @@ async def show_user_detail(message, user_row):
                 InlineKeyboardButton("+7 gün", callback_data=f"usub_extend_{sub['id']}_7"),
                 InlineKeyboardButton("+30 gün", callback_data=f"usub_extend_{sub['id']}_30"),
             ],
-            [
-                InlineKeyboardButton("🎁 Yeni VIP Ver", callback_data=f"grant_user_{user_id}"),
-            ],
         ]
 
         await message.reply_text(
-            f"📢 {ch_name}\n"
-            f"Durum: {sub['status']}\n"
-            f"Bitiş: {sub.get('end_date')}",
+            f"📢 {name}\nDurum: {sub['status']}\nBitiş: {sub.get('end_date')}",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
@@ -1767,13 +1848,7 @@ async def coupons_message(message):
 
     await message.reply_text(
         "🎟️ Kuponlar",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("➕ Kupon Oluştur", callback_data="coupon_add"),
-                ]
-            ]
-        ),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Kupon Oluştur", callback_data="coupon_add")]]),
     )
 
     if not data.data:
@@ -1782,20 +1857,61 @@ async def coupons_message(message):
 
     for c in data.data:
         status = "Aktif ✅" if c.get("active") else "Pasif ⛔"
-
-        keyboard = [
-            [
-                InlineKeyboardButton("Aç/Kapat", callback_data=f"coupon_toggle_{c['id']}"),
-            ]
-        ]
+        ch_text = f"Kanal ID: {c.get('channel_id')}" if c.get("channel_id") else "Tüm kanallar"
 
         await message.reply_text(
             f"Kupon: {c['code']}\n"
             f"Yüzde: %{c.get('discount_percent') or 0}\n"
             f"Stars indirim: {c.get('discount_stars') or 0}\n"
+            f"Geçerli: {ch_text}\n"
             f"Kullanım: {c.get('used_count') or 0}/{c.get('max_uses') or '∞'}\n"
             f"Durum: {status}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Aç/Kapat", callback_data=f"coupon_toggle_{c['id']}")]]),
+        )
+
+
+async def faq_user_message(message):
+    data = supabase.table("faq").select("*").eq("active", True).order("id").execute()
+
+    if not data.data:
+        await message.reply_text("❓ Henüz SSS eklenmedi.")
+        return
+
+    keyboard = []
+
+    for item in data.data:
+        keyboard.append([InlineKeyboardButton(item["question"], callback_data=f"faq_view_{item['id']}")])
+
+    await message.reply_text("❓ Sık Sorulan Sorular", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def faq_answer(message, faq_id):
+    item = supabase.table("faq").select("*").eq("id", faq_id).single().execute().data
+
+    if not item:
+        await message.reply_text("❌ SSS bulunamadı.")
+        return
+
+    await message.reply_text(f"❓ {item['question']}\n\n{item['answer']}")
+
+
+async def faq_admin_message(message):
+    data = supabase.table("faq").select("*").order("id", desc=True).execute()
+
+    await message.reply_text(
+        "❓ SSS Yönetimi",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ SSS Ekle", callback_data="faq_add")]]),
+    )
+
+    if not data.data:
+        await message.reply_text("Henüz SSS yok.")
+        return
+
+    for item in data.data:
+        status = "Aktif ✅" if item.get("active") else "Pasif ⛔"
+        await message.reply_text(
+            f"ID: {item['id']}\nSoru: {item['question']}\nDurum: {status}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Aç/Kapat", callback_data=f"faq_toggle_{item['id']}")]]),
         )
 
 
@@ -1814,29 +1930,18 @@ async def support_requests_message(message):
         return
 
     for r in data.data:
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Kapat", callback_data=f"support_close_{r['id']}"),
-            ]
-        ]
-
         await message.reply_text(
             f"🆘 Destek Talebi\n\n"
             f"ID: {r['id']}\n"
             f"Kullanıcı: @{r.get('username') or 'yok'}\n"
             f"User ID: {r['user_id']}\n"
             f"Mesaj:\n{r['message']}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Kapat", callback_data=f"support_close_{r['id']}")]]),
         )
 
 
 async def cancel_requests_message(message):
-    data = (
-        supabase.table("cancel_requests")
-        .select("*")
-        .eq("status", "pending")
-        .execute()
-    )
+    data = supabase.table("cancel_requests").select("*").eq("status", "pending").execute()
 
     if not data.data:
         await message.reply_text("❌ Bekleyen iptal talebi yok.")
@@ -1851,19 +1956,73 @@ async def cancel_requests_message(message):
         ]
 
         await message.reply_text(
-            f"❌ İptal Talebi\n\n"
-            f"Talep ID: {req['id']}\n"
-            f"Kullanıcı ID: {req['user_id']}\n"
-            f"Kanal ID: {req['channel_id']}",
+            f"❌ İptal Talebi\n\nTalep ID: {req['id']}\nKullanıcı ID: {req['user_id']}\nKanal ID: {req['channel_id']}",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
+
+
+async def blacklist_message(message):
+    data = supabase.table("blacklist").select("*").eq("active", True).order("id", desc=True).execute()
+
+    if not data.data:
+        await message.reply_text("🚫 Kara listede aktif kullanıcı yok.")
+        return
+
+    for b in data.data:
+        await message.reply_text(
+            f"🚫 User ID: {b['user_id']}\nSebep: {b.get('reason') or '-'}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Çıkar", callback_data=f"unblacklist_{b['user_id']}")]]),
+        )
+
+
+async def admins_message(message):
+    data = supabase.table("admins").select("*").order("id", desc=True).execute()
+
+    await message.reply_text(
+        "👮 Adminler",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Admin Ekle", callback_data="admin_add_admin")]]),
+    )
+
+    await message.reply_text(f"Owner: {OWNER_ID}")
+
+    if not data.data:
+        return
+
+    for a in data.data:
+        status = "Aktif ✅" if a.get("active") else "Pasif ⛔"
+        await message.reply_text(
+            f"User ID: {a['user_id']}\nRole: {a['role']}\nDurum: {status}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Aç/Kapat", callback_data=f"admin_toggle_{a['user_id']}")]]),
+        )
+
+
+async def logs_message(message):
+    data = supabase.table("logs").select("*").order("id", desc=True).limit(30).execute()
+
+    if not data.data:
+        await message.reply_text("📜 Henüz log yok.")
+        return
+
+    text = "📜 Son İşlemler\n\n"
+
+    for log in data.data:
+        text += (
+            f"ID: {log['id']}\n"
+            f"İşlem: {log['action']}\n"
+            f"Actor: {log.get('actor_id')}\n"
+            f"Target: {log.get('target_user_id')}\n"
+            f"Kanal: {log.get('channel_id')}\n"
+            f"Detay: {log.get('details') or '-'}\n"
+            f"Tarih: {log['created_at']}\n\n"
+        )
+
+    await message.reply_text(text[:3900])
 
 
 async def export_sales_csv(message):
     data = supabase.table("sales").select("*").order("id", desc=True).execute().data or []
 
     output = io.StringIO()
-
     writer = csv.DictWriter(
         output,
         fieldnames=[
@@ -1873,11 +2032,11 @@ async def export_sales_csv(message):
             "channel_id",
             "price",
             "coupon_code",
+            "refund_status",
             "payment_payload",
             "created_at",
         ],
     )
-
     writer.writeheader()
 
     for row in data:
@@ -1886,150 +2045,106 @@ async def export_sales_csv(message):
     file_data = io.BytesIO(output.getvalue().encode("utf-8"))
     file_data.name = "sales.csv"
 
-    await message.reply_document(
-        document=file_data,
-        filename="sales.csv",
-        caption="📄 Satış CSV"
-    )
+    await message.reply_document(document=file_data, filename="sales.csv", caption="📄 Satış CSV")
 
 
 async def broadcast_message(message, context, text):
     users = supabase.table("users").select("*").execute().data or []
-
-    sent = 0
-    failed = 0
+    sent = failed = 0
 
     await message.reply_text(f"📣 Duyuru başladı. Kullanıcı sayısı: {len(users)}")
 
     for u in users:
         try:
-            await context.bot.send_message(chat_id=u["user_id"], text=text)
-            sent += 1
+            if not await is_blacklisted(u["user_id"]):
+                await context.bot.send_message(chat_id=u["user_id"], text=text)
+                sent += 1
             await asyncio.sleep(BROADCAST_DELAY_SECONDS)
         except Exception:
             failed += 1
 
+    await log_event("broadcast_sent", message.chat_id, details=f"sent={sent}, failed={failed}")
     await message.reply_text(f"✅ Duyuru bitti. Gönderildi: {sent}, Hata: {failed}")
 
-
-# =========================
-# JOBS
-# =========================
 
 async def expire_old_subscriptions_job(context: ContextTypes.DEFAULT_TYPE):
     await expire_old_subscriptions(context)
 
 
 async def expire_old_subscriptions(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        data = (
-            supabase.table("subscriptions")
-            .select("*")
-            .eq("status", "active")
-            .execute()
-        )
+    data = supabase.table("subscriptions").select("*").eq("status", "active").execute()
+    current = now_utc()
 
-        current = now_utc()
+    for sub in data.data:
+        end = parse_dt(sub.get("end_date"))
 
-        for sub in data.data:
-            end = parse_dt(sub.get("end_date"))
+        if end and end < current:
+            ch = await get_channel(sub["channel_id"])
 
-            if end and end < current:
-                ch = await get_channel(sub["channel_id"])
+            if ch:
+                await remove_user_from_channel(context, ch, sub["user_id"])
 
-                if ch:
-                    await remove_user_from_channel(context, ch, sub["user_id"])
+            supabase.table("subscriptions").update({"status": "expired"}).eq("id", sub["id"]).execute()
+            await log_event("subscription_expired", None, sub["user_id"], sub["channel_id"])
 
-                supabase.table("subscriptions").update(
-                    {"status": "expired"}
-                ).eq("id", sub["id"]).execute()
-
-                try:
-                    await context.bot.send_message(
-                        sub["user_id"],
-                        "⛔ VIP üyelik süren bitti. Yenilemek için bot üzerinden tekrar satın alabilirsin.",
-                    )
-                except Exception:
-                    pass
-
-    except Exception as e:
-        logger.error("Üyelik süre kontrol hatası: %s", e)
+            try:
+                await context.bot.send_message(sub["user_id"], "⛔ VIP üyelik süren bitti. Yenilemek için bot üzerinden tekrar satın alabilirsin.")
+            except Exception:
+                pass
 
 
 async def warning_job(context: ContextTypes.DEFAULT_TYPE):
+    data = supabase.table("subscriptions").select("*").eq("status", "active").execute()
+    current = now_utc()
+
+    for sub in data.data:
+        end = parse_dt(sub.get("end_date"))
+
+        if not end:
+            continue
+
+        remaining = end - current
+        ch = await get_channel(sub["channel_id"])
+        name = ch["name"] if ch else f"Kanal ID {sub['channel_id']}"
+
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⭐ Üyeliği Uzat", callback_data=f"buy_{sub['channel_id']}")]])
+
+        if remaining <= timedelta(days=1) and not sub.get("warn_1d_sent"):
+            try:
+                await context.bot.send_message(sub["user_id"], f"⏳ VIP üyeliğin 1 gün içinde bitiyor.\n\n📢 Kanal: {name}", reply_markup=keyboard)
+                supabase.table("subscriptions").update({"warn_1d_sent": True}).eq("id", sub["id"]).execute()
+            except Exception:
+                pass
+
+        elif remaining <= timedelta(days=3) and not sub.get("warn_3d_sent"):
+            try:
+                await context.bot.send_message(sub["user_id"], f"⏳ VIP üyeliğin 3 gün içinde bitiyor.\n\n📢 Kanal: {name}", reply_markup=keyboard)
+                supabase.table("subscriptions").update({"warn_3d_sent": True}).eq("id", sub["id"]).execute()
+            except Exception:
+                pass
+
+
+async def daily_report_job(context: ContextTypes.DEFAULT_TYPE):
+    text = await admin_dashboard_text()
     try:
-        data = (
-            supabase.table("subscriptions")
-            .select("*")
-            .eq("status", "active")
-            .execute()
-        )
+        await context.bot.send_message(OWNER_ID, f"📊 Günlük Rapor\n\n{text}")
+    except Exception:
+        pass
 
-        current = now_utc()
-
-        for sub in data.data:
-            end = parse_dt(sub.get("end_date"))
-
-            if not end:
-                continue
-
-            remaining = end - current
-            ch = await get_channel(sub["channel_id"])
-            channel_name = ch["name"] if ch else f"Kanal ID {sub['channel_id']}"
-
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("⭐ Üyeliği Uzat", callback_data=f"buy_{sub['channel_id']}"),
-                    ]
-                ]
-            )
-
-            if remaining <= timedelta(days=1) and not sub.get("warn_1d_sent"):
-                await context.bot.send_message(
-                    sub["user_id"],
-                    f"⏳ VIP üyeliğin 1 gün içinde bitiyor.\n\n📢 Kanal: {channel_name}",
-                    reply_markup=keyboard,
-                )
-
-                supabase.table("subscriptions").update(
-                    {"warn_1d_sent": True}
-                ).eq("id", sub["id"]).execute()
-
-            elif remaining <= timedelta(days=3) and not sub.get("warn_3d_sent"):
-                await context.bot.send_message(
-                    sub["user_id"],
-                    f"⏳ VIP üyeliğin 3 gün içinde bitiyor.\n\n📢 Kanal: {channel_name}",
-                    reply_markup=keyboard,
-                )
-
-                supabase.table("subscriptions").update(
-                    {"warn_3d_sent": True}
-                ).eq("id", sub["id"]).execute()
-
-    except Exception as e:
-        logger.error("Uyarı job hatası: %s", e)
-
-
-# =========================
-# APP
-# =========================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.TEXT, channel_id_reader))
-
 app.add_handler(CallbackQueryHandler(button_router))
-
 app.add_handler(PreCheckoutQueryHandler(precheckout))
 app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
 
 app.job_queue.run_repeating(expire_old_subscriptions_job, interval=3600, first=30)
 app.job_queue.run_repeating(warning_job, interval=21600, first=60)
+app.job_queue.run_repeating(daily_report_job, interval=86400, first=120)
 
 print("VIP bot çalışıyor...")
 app.run_polling()
