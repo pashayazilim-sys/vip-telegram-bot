@@ -23,7 +23,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=MAIN_MENU
     )
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Yetkin yok.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Kanal Ekle", callback_data="add")],
+        [InlineKeyboardButton("📢 Kanalları Gör", callback_data="list")],
+        [InlineKeyboardButton("❌ Talepler", callback_data="cancel")]
+    ]
+
+    await update.message.reply_text(
+        "👑 Admin Panel",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Yetkin yok.")
         return
