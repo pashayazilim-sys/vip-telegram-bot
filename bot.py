@@ -19,6 +19,9 @@ ADMIN_ID = 957422314
 
 logging.basicConfig(level=logging.INFO)
 
+# Basit hafıza (şimdilik burada tutuyoruz)
+channels = []
+
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         ["📢 VIP Kanallar"],
@@ -35,6 +38,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=MAIN_MENU,
     )
 
+# ADMIN PANEL
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Yetkin yok.")
@@ -51,6 +55,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
+# BUTON HANDLER
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -64,31 +69,84 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "➕ Kanal eklemek için:\n"
             "/ekle VIP 2500 https://t.me/+xxxx"
         )
+
     elif query.data == "list":
-        await query.message.reply_text("📢 Henüz kanal yok.")
+        if not channels:
+            await query.message.reply_text("📢 Henüz kanal yok.")
+        else:
+            text = "📢 Kanallar:\n\n"
+            for ch in channels:
+                text += f"{ch['name']} - {ch['price']}⭐\n{ch['link']}\n\n"
+            await query.message.reply_text(text)
+
     elif query.data == "cancel":
         await query.message.reply_text("❌ İptal talebi yok.")
 
+# KANAL EKLE KOMUTU
+async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Yetkin yok.")
+        return
+
+    if len(context.args) < 3:
+        await update.message.reply_text(
+            "❌ Kullanım:\n/ekle KanalAdı Fiyat Link\n\n"
+            "Örnek:\n/ekle VIP 2500 https://t.me/+xxxx"
+        )
+        return
+
+    name = context.args[0]
+    price = context.args[1]
+    link = context.args[2]
+
+    channels.append({
+        "name": name,
+        "price": price,
+        "link": link
+    })
+
+    await update.message.reply_text("✅ Kanal eklendi!")
+
+# MENÜ
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     if text == "📢 VIP Kanallar":
-        await update.message.reply_text("📢 Henüz kanal eklenmedi.")
+        if not channels:
+            await update.message.reply_text("📢 Henüz kanal eklenmedi.")
+        else:
+            for ch in channels:
+                keyboard = [
+                    [InlineKeyboardButton(
+                        f"⭐ {ch['price']} - Satın Al",
+                        url=ch['link']
+                    )]
+                ]
+                await update.message.reply_text(
+                    f"📢 {ch['name']}",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+
     elif text == "📅 Üyeliğim":
         await update.message.reply_text("📅 Aktif üyelik bulunamadı.")
+
     elif text == "❌ İptal Talebi":
         await update.message.reply_text(
             "❌ Şu anda aktif üyeliğin olmadığı için iptal talebi oluşturulamadı."
         )
+
     elif text == "ℹ️ Yardım":
         await update.message.reply_text("Destek için admin ile iletişime geç.")
+
     else:
         await update.message.reply_text("Menüden bir seçenek seçebilirsin.")
 
+# APP
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("admin", admin))
+app.add_handler(CommandHandler("ekle", add_channel))
 app.add_handler(CallbackQueryHandler(admin_buttons))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
 
