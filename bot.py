@@ -1,6 +1,6 @@
 import logging
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 TOKEN = "8661407355:AAGspKLwZznDJDm3eM9OQ_TpkrmkAi68mDg"
 ADMIN_ID = 957422314
