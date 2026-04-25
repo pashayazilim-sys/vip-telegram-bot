@@ -23,14 +23,6 @@ from telegram.ext import (
 from supabase import create_client
 
 
-# =========================
-# ENV VARIABLES
-# Railway Variables içinde olmalı:
-# BOT_TOKEN
-# SUPABASE_URL
-# SUPABASE_KEY
-# =========================
-
 TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -54,10 +46,6 @@ if not SUPABASE_KEY:
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# =========================
-# MENÜ
-# =========================
-
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         ["📢 VIP Kanallar"],
@@ -67,10 +55,6 @@ MAIN_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-
-# =========================
-# HELPERS
-# =========================
 
 def now_utc():
     return datetime.utcnow()
@@ -137,11 +121,6 @@ async def get_channel(channel_id):
 
 
 async def create_one_time_invite_link(context, ch, user_id):
-    """
-    Ödeme sonrası tek kullanımlık davet linki üretir.
-    Botun VIP kanalda admin olması gerekir.
-    """
-
     chat_id_raw = ch.get("chat_id")
 
     if not chat_id_raw:
@@ -164,11 +143,6 @@ async def create_one_time_invite_link(context, ch, user_id):
 
 
 async def remove_user_from_channel(context, ch, user_id):
-    """
-    Kullanıcıyı kanaldan çıkarır.
-    Botun kanalda admin ve ban yetkisi olmalı.
-    """
-
     chat_id_raw = ch.get("chat_id")
 
     if not chat_id_raw:
@@ -200,11 +174,6 @@ async def expire_old_subscriptions_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def expire_old_subscriptions(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Süresi biten aktif üyelikleri expired yapar.
-    Mümkünse kullanıcıyı kanaldan çıkarır.
-    """
-
     try:
         data = (
             supabase.table("subscriptions")
@@ -236,10 +205,6 @@ async def expire_old_subscriptions(context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Üyelik süre kontrol hatası: {e}")
 
 
-# =========================
-# USER COMMANDS
-# =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -253,13 +218,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    VIP kanal chat ID bulmak için.
-    Botu VIP kanala admin yap, kanalda /id yaz.
-    """
-
     chat = update.effective_chat
     await update.effective_message.reply_text(f"Chat ID:\n{chat.id}")
+
+
+async def channel_id_reader(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.channel_post:
+        return
+
+    text = update.channel_post.text or ""
+
+    if text.startswith("/id"):
+        chat_id = update.channel_post.chat_id
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Chat ID:\n{chat_id}"
+        )
 
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -392,10 +367,6 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Menüden bir seçenek seçebilirsin.")
 
-
-# =========================
-# ADMIN PANEL
-# =========================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -657,10 +628,6 @@ async def users_message(message):
     await message.reply_text(text)
 
 
-# =========================
-# STARS PAYMENT
-# =========================
-
 async def buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -812,10 +779,6 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
-# =========================
-# CANCEL REQUESTS
-# =========================
-
 async def cancel_requests_message(message):
     data = (
         supabase.table("cancel_requests")
@@ -915,17 +878,13 @@ async def cancel_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 
-# =========================
-# APP
-# =========================
-
 app = ApplicationBuilder().token(TOKEN).build()
 
-# User commands
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("id", get_chat_id))
 
-# Admin commands
+app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.TEXT, channel_id_reader))
+
 app.add_handler(CommandHandler("admin", admin))
 app.add_handler(CommandHandler("ekle", add_channel))
 app.add_handler(CommandHandler("sil", delete_channel))
@@ -936,19 +895,15 @@ app.add_handler(CommandHandler("kanallar", list_channels))
 app.add_handler(CommandHandler("satislar", sales))
 app.add_handler(CommandHandler("kullanicilar", users))
 
-# Buttons
 app.add_handler(CallbackQueryHandler(buy_button, pattern="^buy_"))
 app.add_handler(CallbackQueryHandler(cancel_admin_buttons, pattern="^cancel_"))
 app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^admin_"))
 
-# Payments
 app.add_handler(PreCheckoutQueryHandler(precheckout))
 app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-# Menu
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
 
-# Periodic membership expiry check
 app.job_queue.run_repeating(
     expire_old_subscriptions_job,
     interval=3600,
