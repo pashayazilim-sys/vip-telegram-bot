@@ -35,6 +35,25 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📢 Kanalları Gör", callback_data="list")],
         [InlineKeyboardButton("❌ Talepler", callback_data="cancel")]
     ]
+    async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.from_user.id != ADMIN_ID:
+        await query.message.reply_text("❌ Yetkin yok.")
+        return
+
+    if query.data == "add":
+        await query.message.reply_text(
+            "➕ Kanal eklemek için:\n"
+            "/ekle VIP 2500 https://t.me/+xxxx"
+        )
+
+    elif query.data == "list":
+        await query.message.reply_text("📢 Henüz kanal yok.")
+
+    elif query.data == "cancel":
+        await query.message.reply_text("❌ İptal talebi yok.")
 
     await update.message.reply_text(
         "👑 Admin Panel",
