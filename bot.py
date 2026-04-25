@@ -24,9 +24,9 @@ from supabase import create_client
 
 
 # ENV VARIABLES
-TOKEN = os.getenv("8661407355:AAGspKLwZznDJDm3eM9OQ_TpkrmkAi68mDg")
-SUPABASE_URL = os.getenv("https://kwlxuvkandoxducdcsnz.supabase.co")
-SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt3bHh1dmthbmRveGR1Y2Rjc256Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMDQ1OTAsImV4cCI6MjA5MjY4MDU5MH0.a4zUaP8bSjBC_wnJklmy5sXmU15NLYFfeI4j0f7M3cQ")
+TOKEN = os.getenv("BOT_TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY").a4zUaP8bSjBC_wnJklmy5sXmU15NLYFfeI4j0f7M3cQ")
 
 ADMIN_ID = 957422314
 MEMBERSHIP_DAYS = 30
