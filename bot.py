@@ -1182,6 +1182,47 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await search_user(update.message, text)
             context.user_data.clear()
 
+        elif mode == "admin_add_user_balance":
+            if not can_manage(user_id):
+                context.user_data.clear()
+                await update.message.reply_text("â Yetkin yok.")
+                return
+
+            parts = [p.strip() for p in raw_text.split("|")]
+            if len(parts) < 2:
+                await update.message.reply_text("â Format: UserID | Tutar | Not\n\nÃrnek:\n957422314 | 2500 | manuel reklam bakiyesi")
+                return
+
+            target_id_text = parts[0].replace("@", "").strip()
+            amount_text = parts[1].replace(" ", "").strip()
+            if not target_id_text.isdigit() or not amount_text.isdigit():
+                await update.message.reply_text("â UserID ve tutar sadece rakam olmalÄ±. Ãrnek: 957422314 | 2500")
+                return
+
+            target_id = int(target_id_text)
+            amount = int(amount_text)
+            note = parts[2] if len(parts) >= 3 and parts[2] else "Admin manuel bakiye yÃ¼kledi"
+            if amount < 1:
+                await update.message.reply_text("â Tutar en az 1 Stars olmalÄ±.")
+                return
+            if amount > 1000000:
+                await update.message.reply_text("â Tek seferde en fazla 1.000.000 Stars eklenebilir.")
+                return
+
+            ok = await change_ad_balance(target_id, amount, "admin_add", note)
+            if not ok:
+                await update.message.reply_text("â Bakiye eklenemedi. ad_balances/ad_transactions tablolarÄ±nÄ± kontrol et.")
+                return
+
+            new_balance = await get_ad_balance(target_id)
+            await log_event("admin_added_ad_balance", user_id, target_user_id=target_id, details=f"+{amount} Stars | {note}")
+            context.user_data.clear()
+            await update.message.reply_text(f"â Bakiye eklendi.\n\nKullanÄ±cÄ± ID: {target_id}\nEklenen: {amount} Stars\nGÃ¼ncel bakiye: {new_balance} Stars")
+            try:
+                await context.bot.send_message(target_id, f"ð° Reklam bakiyene admin tarafÄ±ndan {amount} Stars eklendi.\nGÃ¼ncel bakiyen: {new_balance} Stars")
+            except Exception:
+                pass
+
         elif mode == "ad_topup_amount":
             amount_text = raw_text.replace(" ", "").strip()
             if not amount_text.isdigit():
@@ -1746,6 +1787,18 @@ async def admin_callback(query, context, data):
         await query.message.reply_text("Reklam paketi sistemi kapatildi. Reklam fiyatlari kanal bazli ayarlaniyor.")
     elif data == "admin_add_ad_package":
         await query.message.reply_text("Reklam paketi sistemi kapatildi. Kullanici direkt kanal seciyor; fiyatlari Reklam Fiyatlari ekranindan kanal bazli ayarla.")
+    elif data == "admin_add_user_balance":
+        if not can_manage(user_id):
+            await query.message.reply_text("â Yetkin yok."); return
+        context.user_data["mode"] = "admin_add_user_balance"
+        await query.message.reply_text(
+            "ð° KullanÄ±cÄ±ya bakiye yÃ¼kle\n\n"
+            "Format:\n"
+            "UserID | Tutar | Not\n\n"
+            "Ãrnek:\n"
+            "957422314 | 2500 | manuel reklam bakiyesi\n\n"
+            "Bu iÅlem kullanÄ±cÄ±nÄ±n reklam bakiyesine Stars ekler. GerÃ§ek Ã¶deme almaz; admin manuel ekleme yapmÄ±Å olur."
+        )
     elif data == "admin_ad_balances":
         await ad_balances_admin_message(query.message)
     elif data == "admin_ad_stats":
@@ -3334,14 +3387,22 @@ async def ad_channel_prices_admin_message(message):
 
 async def ad_balances_admin_message(message):
     rows = supabase.table("ad_balances").select("*").order("balance", desc=True).limit(20).execute().data or []
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("â KullanÄ±cÄ±ya Bakiye YÃ¼kle", callback_data="admin_add_user_balance")],
+    ])
     if not rows:
-        await message.reply_text(" Bakiye kaydi yok.")
+        await message.reply_text(
+            "ð° Bakiye Ä°Ålemleri\n\n"
+            "HenÃ¼z bakiye kaydÄ± yok.\n\n"
+            "KullanÄ±cÄ±ya manuel reklam bakiyesi eklemek iÃ§in aÅaÄÄ±daki butona bas.",
+            reply_markup=kb,
+        )
         return
-    text = "\U0001f4b0 Reklam Bakiyeleri\n\n"
+    text = "ð° Reklam Bakiyeleri\n\n"
     for r in rows:
         text += f"User ID: {r.get('user_id')} | Bakiye: {r.get('balance')} | Harcanan: {r.get('spent') or 0}\n"
-    await message.reply_text(text[:3900])
-
+    text += "\nManuel bakiye eklemek iÃ§in aÅaÄÄ±daki butonu kullan."
+    await message.reply_text(text[:3900], reply_markup=kb)
 
 async def toggle_ad_package(message, package_id, admin_id):
     row = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
