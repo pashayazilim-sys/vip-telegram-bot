@@ -701,8 +701,8 @@ async def open_admin_panel(message):
         [InlineKeyboardButton("\U0001f465 Kullan\u0131c\u0131lar", callback_data="admin_users"), InlineKeyboardButton("\U0001f50d Kullan\u0131c\u0131 Ara", callback_data="admin_search_user")],
         [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
         [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals"), InlineKeyboardButton("\U0001f389 \u00c7ekili\u015f Paneli", callback_data="admin_giveaway")],
-        [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4e6 Reklam Paketleri", callback_data="admin_ad_packages")],
-        [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances"), InlineKeyboardButton("\u2795 Reklam Paketi Ekle", callback_data="admin_add_ad_package")],
+        [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4b8 Reklam Fiyatlari", callback_data="admin_ad_channel_prices")],
+        [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances")],
         [InlineKeyboardButton("\U0001f4ca Reklam Istatistikleri", callback_data="admin_ad_stats"), InlineKeyboardButton("\U0001f9ea Sistem Testi", callback_data="admin_system_test")],
         [InlineKeyboardButton("\u2753 SSS Y\u00f6net", callback_data="admin_faq"), InlineKeyboardButton("\U0001f198 Destek Talepleri", callback_data="admin_support")],
         [InlineKeyboardButton("\u274c \u0130ptal Talepleri", callback_data="admin_cancel"), InlineKeyboardButton("\U0001f6ab Kara Liste", callback_data="admin_blacklist")],
@@ -960,6 +960,25 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             await send_custom_topup_invoice(update.message, context, amount)
 
+        elif mode == "edit_channel_ad_price":
+            if not can_manage(user_id):
+                context.user_data.clear()
+                await update.message.reply_text(" Yetkin yok.")
+                return
+            channel_id = context.user_data.get("channel_id")
+            amount_text = raw_text.replace(" ", "").strip()
+            if not amount_text.isdigit():
+                await update.message.reply_text("Lutfen sadece rakam yaz. Ornek: 1500")
+                return
+            price = int(amount_text)
+            if price < 1:
+                await update.message.reply_text("Reklam fiyati en az 1 Stars olmali.")
+                return
+            supabase.table("channels").update({"ad_price": price}).eq("id", channel_id).execute()
+            await log_event("channel_ad_price_updated", user_id, channel_id=channel_id, details=f"ad_price={price}")
+            context.user_data.clear()
+            await update.message.reply_text(f"Kanal reklam fiyati guncellendi: {price} Stars")
+
         elif mode == "add_ad_package":
             if not can_manage(user_id):
                 context.user_data.clear()
@@ -1139,7 +1158,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_custom_topup_amount(query.message, context)
         return
     if data == "ad_show_packages":
-        await show_ad_packages_user(query.message, user_id)
+        await show_ad_channels_user(query.message, user_id)
         return
     if data == "ad_my_orders":
         await my_ad_orders(query.message, user_id)
@@ -1149,6 +1168,9 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data.startswith("topup_"):
         await handle_topup(query, context)
+        return
+    if data.startswith("adch_") and len(data.split("_")) == 2 and data.split("_")[1].isdigit():
+        await start_ad_order_channel(query, context)
         return
     if data.startswith("adpkg_") and len(data.split("_")) == 2 and data.split("_")[1].isdigit():
         await start_ad_order(query, context)
@@ -1247,13 +1269,18 @@ async def admin_callback(query, context, data):
         await giveaway_admin_message(query.message)
     elif data == "admin_ads":
         await ad_orders_admin_message(query.message)
-    elif data == "admin_ad_packages":
-        await ad_packages_admin_message(query.message)
-    elif data == "admin_add_ad_package":
+    elif data == "admin_ad_channel_prices":
+        await ad_channel_prices_admin_message(query.message)
+    elif data.startswith("adchprice_"):
         if not can_manage(user_id):
             await query.message.reply_text(" Yetkin yok."); return
-        context.user_data["mode"] = "add_ad_package"
-        await query.message.reply_text(" Reklam paketi ekle:\n\nPaketAdi | Fiyat | Hedef | KanalID/0 | Aciklama\n\nOrnek:\nTek Kanal | 1000 | single | 1 | Tek VIP kanalda reklam\nTum Kanallar | 3000 | all | 0 | Tum aktif kanallarda reklam")
+        context.user_data["mode"] = "edit_channel_ad_price"
+        context.user_data["channel_id"] = int(data.split("_")[1])
+        await query.message.reply_text("Bu kanal icin yeni reklam fiyatini Stars olarak yaz. Ornek: 1500")
+    elif data == "admin_ad_packages":
+        await query.message.reply_text("Reklam paketi sistemi kapatildi. Reklam fiyatlari kanal bazli ayarlaniyor.")
+    elif data == "admin_add_ad_package":
+        await query.message.reply_text("Reklam paketi sistemi kapatildi. Kullanici direkt kanal seciyor; fiyatlari Reklam Fiyatlari ekranindan kanal bazli ayarla.")
     elif data == "admin_ad_balances":
         await ad_balances_admin_message(query.message)
     elif data == "admin_ad_stats":
@@ -2328,6 +2355,19 @@ async def broadcast_message(message, context, text):
 # AD MARKETPLACE / BALANCE SYSTEM
 # =========================================================
 
+
+def get_channel_ad_price(ch):
+    """Return per-channel ad price. Falls back to default setting."""
+    try:
+        value = ch.get("ad_price")
+        if value is not None:
+            price = int(value)
+            if price > 0:
+                return price
+    except Exception:
+        pass
+    return safe_int(get_setting("ad_default_single_price", "1000"), 1000)
+
 async def get_ad_balance(user_id):
     try:
         row = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data
@@ -2472,58 +2512,114 @@ async def show_ad_transactions(message, user_id):
     await message.reply_text(text[:3900])
 
 
-async def show_ad_packages_user(message, user_id):
-    await ensure_default_ad_packages()
-    rows = supabase.table("ad_packages").select("*").eq("active", True).order("id").execute().data or []
+
+async def show_ad_channels_user(message, user_id):
+    rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
     if not rows:
-        await message.reply_text(" Su anda aktif reklam paketi yok.")
+        await message.reply_text("Su anda reklam verilebilecek aktif kanal yok.")
         return
+
     balance = await get_ad_balance(user_id)
-    await message.reply_text(f"\U0001f4e3 Reklam Ver\n\nBakiyen: {balance} Stars\nReklam paketini sec:")
-    for p in rows:
-        target = "Tum aktif VIP kanallar" if p.get("target_type") == "all" else "Tek VIP kanal"
+    await message.reply_text(
+        f"\U0001f4e3 Kanallara Reklam Ver\n\n"
+        f"Bakiyen: {balance} Stars\n\n"
+        f"Reklam vermek istedigin kanali sec.\n"
+        f"Bakiyen yeterliyse reklam formu acilir, yetmezse once bakiye yuklemen istenir."
+    )
+
+    for ch in rows:
+        price = get_channel_ad_price(ch)
+        chat_id = ch.get("chat_id") or "-"
+        desc = ch.get("description") or "-"
+        can_buy = balance >= price
+        button_text = "Bu kanala reklam ver" if can_buy else "Bakiye yetersiz"
         await message.reply_text(
-            f"\U0001f4e6 {p.get('name')}\n"
-            f"Fiyat: {p.get('price')} Stars\n"
-            f"Hedef: {target}\n"
-            f"Aciklama: {p.get('description') or '-'}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Bu paketi sec", callback_data=f"adpkg_{p['id']}")]])
+            f"\U0001f4e2 {ch.get('name')}\n"
+            f"Reklam fiyati: {price} Stars\n"
+            f"Chat ID: {chat_id}\n"
+            f"Aciklama: {desc}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(button_text, callback_data=f"adch_{ch['id']}")]])
         )
 
 
-async def start_ad_order(query, context):
-    package_id = int(query.data.split("_")[1])
-    p = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
-    if not p or not p.get("active"):
-        await query.message.reply_text(" Reklam paketi bulunamadi veya pasif.")
+async def show_ad_packages_user(message, user_id):
+    # Backward-compatible name. New flow has no ad packages; user selects channel directly.
+    await show_ad_channels_user(message, user_id)
+
+
+async def start_ad_order_channel(query, context):
+    channel_id = int(query.data.split("_")[1])
+    ch = await get_channel(channel_id)
+
+    if not ch or not ch.get("active"):
+        await query.message.reply_text("Kanal bulunamadi veya pasif.")
         return
+
+    price = get_channel_ad_price(ch)
     balance = await get_ad_balance(query.from_user.id)
-    price = int(p.get("price") or 0)
+
     if balance < price:
-        await query.message.reply_text(f" Bakiyen yetersiz.\n\nGerekli: {price} Stars\nBakiyen: {balance} Stars\n\nOnce Bakiye Yukle butonundan bakiye yukle.")
+        await query.message.reply_text(
+            f"Bakiyen yetersiz.\n\n"
+            f"Bu kanal reklam fiyati: {price} Stars\n"
+            f"Bakiyen: {balance} Stars\n\n"
+            f"Once Bakiye > Bakiye Ekle kismindan bakiye yukle."
+        )
         return
+
     context.user_data.clear()
     context.user_data["mode"] = "ad_title"
-    context.user_data["ad_package_id"] = package_id
-    await query.message.reply_text(" Reklam basligini yaz. Ornek: Yeni VIP Kanal")
+    context.user_data["ad_channel_id"] = channel_id
+    context.user_data["ad_price"] = price
+    context.user_data["ad_channel_name"] = ch.get("name") or f"Kanal ID {channel_id}"
+
+    await query.message.reply_text(
+        f"Reklam kanali secildi: {ch.get('name')}\n"
+        f"Fiyat: {price} Stars\n\n"
+        f"Simdi reklam basligini yaz. Ornek: Yeni VIP Kanal"
+    )
+
+
+async def start_ad_order(query, context):
+    # Old package callback support. New UI does not use packages.
+    await query.message.reply_text("Reklam paketi sistemi kapatildi. Bakiye > Kanallara Reklam Ver kismindan kanal sec.")
 
 
 async def preview_ad_order(message, context):
-    package_id = context.user_data.get("ad_package_id")
-    p = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
-    if not p:
+    channel_id = context.user_data.get("ad_channel_id")
+    price = int(context.user_data.get("ad_price") or 0)
+    channel_name = context.user_data.get("ad_channel_name") or "Secilen kanal"
+
+    if not channel_id:
         context.user_data.clear()
-        await message.reply_text(" Reklam paketi bulunamadi. Islem iptal edildi.")
+        await message.reply_text("Reklam kanali bulunamadi. Islem iptal edildi.")
         return
+
+    ch = await get_channel(channel_id)
+    if not ch or not ch.get("active"):
+        context.user_data.clear()
+        await message.reply_text("Secilen kanal bulunamadi veya pasif. Islem iptal edildi.")
+        return
+
+    if price <= 0:
+        price = get_channel_ad_price(ch)
+        context.user_data["ad_price"] = price
+
     title = context.user_data.get("ad_title")
     ad_text = context.user_data.get("ad_text")
     link = context.user_data.get("ad_link")
-    price = int(p.get("price") or 0)
-    kb = [[InlineKeyboardButton("Onaya Gonder", callback_data="ad_submit"), InlineKeyboardButton("Iptal", callback_data="ad_cancel")]]
+    image_line = "Var" if context.user_data.get("ad_image_file_id") else "Yok"
+
+    kb = [[
+        InlineKeyboardButton("Onaya Gonder", callback_data="ad_submit"),
+        InlineKeyboardButton("Iptal", callback_data="ad_cancel"),
+    ]]
+
     await message.reply_text(
         f"\U0001f4e3 Reklam Onizleme\n\n"
-        f"Paket: {p.get('name')}\n"
-        f"Fiyat: {price} Stars\n\n"
+        f"Kanal: {channel_name}\n"
+        f"Fiyat: {price} Stars\n"
+        f"Gorsel: {image_line}\n\n"
         f"Baslik: {title}\n\n"
         f"Metin:\n{ad_text}\n\n"
         f"Link: {link}\n\n"
@@ -2535,29 +2631,46 @@ async def preview_ad_order(message, context):
 
 async def submit_ad_order(query, context):
     if context.user_data.get("mode") != "ad_preview":
-        await query.message.reply_text(" Aktif reklam onizlemesi yok.")
+        await query.message.reply_text("Aktif reklam onizlemesi yok.")
         return
-    package_id = context.user_data.get("ad_package_id")
-    p = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
-    if not p:
+
+    channel_id = context.user_data.get("ad_channel_id")
+    ch = await get_channel(channel_id) if channel_id else None
+
+    if not ch or not ch.get("active"):
         context.user_data.clear()
-        await query.message.reply_text(" Reklam paketi bulunamadi.")
+        await query.message.reply_text("Secilen kanal bulunamadi veya pasif.")
         return
-    price = int(p.get("price") or 0)
+
+    price = int(context.user_data.get("ad_price") or get_channel_ad_price(ch))
     balance = await get_ad_balance(query.from_user.id)
+
     if balance < price:
         context.user_data.clear()
-        await query.message.reply_text(" Bakiyen yetersiz. Islem iptal edildi.")
+        await query.message.reply_text(
+            f"Bakiyen yetersiz. Islem iptal edildi.\n\n"
+            f"Gerekli: {price} Stars\n"
+            f"Bakiyen: {balance} Stars"
+        )
         return
-    ok = await change_ad_balance(query.from_user.id, -price, "ad_hold", "Reklam talebi icin bakiye dusuldu")
+
+    ok = await change_ad_balance(
+        query.from_user.id,
+        -price,
+        "ad_hold",
+        f"Reklam talebi icin bakiye dusuldu: {ch.get('name')}",
+    )
     if not ok:
         context.user_data.clear()
-        await query.message.reply_text(" Bakiye dusulemedi. Islem iptal edildi.")
+        await query.message.reply_text("Bakiye dusulemedi. Islem iptal edildi.")
         return
+
     order = {
         "user_id": query.from_user.id,
         "username": safe_username(query.from_user),
-        "package_id": package_id,
+        "package_id": None,
+        "channel_id": int(channel_id),
+        "target_type": "single",
         "title": context.user_data.get("ad_title"),
         "ad_text": context.user_data.get("ad_text"),
         "link": context.user_data.get("ad_link"),
@@ -2565,17 +2678,39 @@ async def submit_ad_order(query, context):
         "status": "pending",
         "price": price,
     }
+
     res = supabase.table("ad_orders").insert(order).execute()
     order_id = res.data[0]["id"] if res.data else None
-    await log_event("ad_order_created", query.from_user.id, query.from_user.id, details=f"order_id={order_id}, price={price}")
+
+    await log_event(
+        "ad_order_created",
+        query.from_user.id,
+        query.from_user.id,
+        channel_id=int(channel_id),
+        details=f"order_id={order_id}, price={price}",
+    )
+
     context.user_data.clear()
-    await query.message.reply_text(" Reklam talebin admin onayina gonderildi.")
-    await query.message.reply_text(f"Kalan bakiye: {await get_ad_balance(query.from_user.id)} Stars")
+
+    await query.message.reply_text(
+        f"Reklam talebin admin onayina gonderildi.\n\n"
+        f"Kanal: {ch.get('name')}\n"
+        f"Kesilen bakiye: {price} Stars\n"
+        f"Kalan bakiye: {await get_ad_balance(query.from_user.id)} Stars"
+    )
+
     try:
-        await context.bot.send_message(OWNER_ID, f" Yeni reklam talebi\n\nOrder ID: {order_id}\nKullanici: @{safe_username(query.from_user) or 'yok'}\nFiyat: {price} Stars\nBaslik: {order['title']}")
+        await context.bot.send_message(
+            OWNER_ID,
+            f"Yeni reklam talebi\n\n"
+            f"Order ID: {order_id}\n"
+            f"Kullanici: @{safe_username(query.from_user) or 'yok'}\n"
+            f"Kanal: {ch.get('name')}\n"
+            f"Fiyat: {price} Stars\n"
+            f"Baslik: {order['title']}"
+        )
     except Exception:
         pass
-
 
 
 async def my_ad_orders(message, user_id):
@@ -2583,48 +2718,63 @@ async def my_ad_orders(message, user_id):
     if not rows:
         await message.reply_text("Henuz reklam talebin yok.")
         return
+
     for o in rows:
         views = o.get("views_count")
         if views is None:
             views = 0
         clicks = safe_int(o.get("clicks_count"), 0)
         links = o.get("published_links") or ""
+
+        ch_name = "-"
+        if o.get("channel_id"):
+            ch = await get_channel(o.get("channel_id"))
+            ch_name = (ch or {}).get("name") or f"Kanal ID {o.get('channel_id')}"
+
         msg = (
             f"\U0001f4c4 Reklam #{o['id']}\n\n"
+            f"Kanal: {ch_name}\n"
             f"Durum: {o.get('status')}\n"
             f"Fiyat: {o.get('price')} Stars\n"
             f"Baslik: {o.get('title')}\n"
             f"Goruntulenme: {views}\n"
             f"Tiklama: {clicks}\n"
         )
+
         if links:
             msg += f"\nYayin linkleri:\n{links[:1200]}"
         else:
             msg += "\nYayin linki henuz yok."
-        await message.reply_text(msg[:3900])
 
+        await message.reply_text(msg[:3900])
 
 async def ad_orders_admin_message(message):
     rows = supabase.table("ad_orders").select("*").eq("status", "pending").order("id", desc=True).limit(20).execute().data or []
     if not rows:
         await message.reply_text("Bekleyen reklam talebi yok.")
         return
+
     for o in rows:
-        p = None
-        try:
-            p = supabase.table("ad_packages").select("*").eq("id", o.get("package_id")).single().execute().data
-        except Exception:
-            pass
+        ch = None
+        if o.get("channel_id"):
+            ch = await get_channel(o.get("channel_id"))
+
         kb = [
-            [InlineKeyboardButton("Onayla ve Yayinla", callback_data=f"ad_approve_{o['id']}"), InlineKeyboardButton("Reddet ve Iade", callback_data=f"ad_reject_{o['id']}")],
+            [
+                InlineKeyboardButton("Onayla ve Yayinla", callback_data=f"ad_approve_{o['id']}"),
+                InlineKeyboardButton("Reddet ve Iade", callback_data=f"ad_reject_{o['id']}"),
+            ],
             [InlineKeyboardButton("Goruntulenme Gir", callback_data=f"ad_views_{o['id']}")],
         ]
+
         image_line = "Var" if o.get("image_file_id") else "Yok"
+        channel_line = (ch or {}).get("name") or f"Kanal ID {o.get('channel_id') or '-'}"
+
         await message.reply_text(
             f"\U0001f4e3 Reklam Talebi #{o['id']}\n\n"
             f"Kullanici: @{o.get('username') or 'yok'}\n"
             f"User ID: {o.get('user_id')}\n"
-            f"Paket: {(p or {}).get('name') or o.get('package_id')}\n"
+            f"Kanal: {channel_line}\n"
             f"Fiyat: {o.get('price')} Stars\n"
             f"Gorsel: {image_line}\n\n"
             f"Baslik: {o.get('title')}\n\n"
@@ -2632,7 +2782,6 @@ async def ad_orders_admin_message(message):
             f"Link: {o.get('link')}",
             reply_markup=InlineKeyboardMarkup(kb),
         )
-
 
 async def ad_packages_admin_message(message):
     await ensure_default_ad_packages()
@@ -2656,6 +2805,25 @@ async def ad_packages_admin_message(message):
             f"Durum: {status}\n"
             f"Aciklama: {p.get('description') or '-'}",
             reply_markup=InlineKeyboardMarkup(kb),
+        )
+
+
+async def ad_channel_prices_admin_message(message):
+    rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
+    if not rows:
+        await message.reply_text("Aktif kanal yok. Once VIP kanal eklemelisin.")
+        return
+
+    await message.reply_text("ð£ Kanal Reklam Fiyatlari\n\nKullanicilar reklam verirken paket secmez; direkt kanal secer.")
+
+    for ch in rows:
+        price = get_channel_ad_price(ch)
+        await message.reply_text(
+            f"Kanal ID: {ch.get('id')}\n"
+            f"Ad: {ch.get('name')}\n"
+            f"Reklam fiyati: {price} Stars\n"
+            f"Chat ID: {ch.get('chat_id') or '-'}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Fiyat Degistir", callback_data=f"adchprice_{ch['id']}")]])
         )
 
 async def ad_balances_admin_message(message):
@@ -2699,34 +2867,51 @@ async def get_bot_username(context):
         return None
 
 
-async def publish_ad_to_targets(context, order, package):
+
+async def publish_ad_to_targets(context, order, package=None):
     channels = []
-    if package.get("target_type") == "all":
-        channels = supabase.table("channels").select("*").eq("active", True).execute().data or []
-    else:
-        cid = package.get("channel_id")
-        if cid:
-            ch = await get_channel(cid)
-            if ch:
-                channels = [ch]
+
+    # New flow: user selected a concrete channel. No ad package is used.
+    if order.get("channel_id"):
+        ch = await get_channel(order.get("channel_id"))
+        if ch:
+            channels = [ch]
+
+    # Backward compatibility for old orders created with packages.
+    elif package:
+        if package.get("target_type") == "all":
+            channels = supabase.table("channels").select("*").eq("active", True).execute().data or []
         else:
-            rows = supabase.table("channels").select("*").eq("active", True).order("id").limit(1).execute().data or []
-            channels = rows
+            cid = package.get("channel_id")
+            if cid:
+                ch = await get_channel(cid)
+                if ch:
+                    channels = [ch]
+            else:
+                rows = supabase.table("channels").select("*").eq("active", True).order("id").limit(1).execute().data or []
+                channels = rows
+
     sent = []
     errors = []
     links = []
     total_views = 0
+
     bot_username = await get_bot_username(context)
     target_url = order.get("link")
+
     if bot_username and order.get("id"):
         button_url = f"https://t.me/{bot_username}?start=ad_{order['id']}"
     else:
         button_url = target_url
+
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("Incele", url=button_url)]])
+
     for ch in channels:
         chat_id = ch.get("chat_id")
         if not chat_id:
+            errors.append(f"{ch.get('name')}: chat_id yok")
             continue
+
         try:
             if order.get("image_file_id"):
                 msg = await context.bot.send_photo(
@@ -2742,13 +2927,16 @@ async def publish_ad_to_targets(context, order, package):
                     reply_markup=kb,
                     disable_web_page_preview=False,
                 )
+
             sent.append(f"{chat_id}:{msg.message_id}")
             link = build_private_message_link(chat_id, msg.message_id)
             if link:
                 links.append(link)
             total_views += safe_int(getattr(msg, "views", 0), 0)
+
         except Exception as e:
             errors.append(f"{chat_id}:{e}")
+
     return sent, errors, links, total_views
 
 
@@ -2757,14 +2945,24 @@ async def approve_and_publish_ad(message, context, order_id, admin_id):
     if not order:
         await message.reply_text("Reklam talebi bulunamadi.")
         return
+
     if order.get("status") != "pending":
         await message.reply_text(f"Bu reklam artik pending degil. Durum: {order.get('status')}")
         return
-    package = supabase.table("ad_packages").select("*").eq("id", order.get("package_id")).single().execute().data
-    if not package:
-        await reject_and_refund_ad(message, order_id, admin_id, reason="Paket bulunamadi")
+
+    package = None
+    if not order.get("channel_id") and order.get("package_id"):
+        try:
+            package = supabase.table("ad_packages").select("*").eq("id", order.get("package_id")).single().execute().data
+        except Exception:
+            package = None
+
+    if not order.get("channel_id") and not package:
+        await reject_and_refund_ad(message, order_id, admin_id, reason="Kanal bulunamadi")
         return
+
     sent, errors, links, total_views = await publish_ad_to_targets(context, order, package)
+
     if sent:
         update_data = {
             "status": "published",
@@ -2775,20 +2973,38 @@ async def approve_and_publish_ad(message, context, order_id, admin_id):
             "published_at": now_utc().isoformat(),
         }
         supabase.table("ad_orders").update(update_data).eq("id", order_id).execute()
-        await log_event("ad_published", admin_id, order.get("user_id"), details=f"order_id={order_id}, sent={len(sent)}, errors={len(errors)}")
+
+        await log_event(
+            "ad_published",
+            admin_id,
+            order.get("user_id"),
+            channel_id=order.get("channel_id"),
+            details=f"order_id={order_id}, sent={len(sent)}, errors={len(errors)}",
+        )
+
         await message.reply_text(f"Reklam yayinlandi. Gonderilen kanal/grup: {len(sent)}")
+
         links_text = "\n".join(links) if links else "Link olusmadi ama reklam gonderildi."
         try:
             await context.bot.send_message(
                 order.get("user_id"),
-                f"Reklamin onaylandi ve yayinlandi.\n\nReklam ID: {order_id}\nGonderilen kanal/grup: {len(sent)}\n\nYayin linkleri:\n{links_text[:1500]}"
+                f"Reklamin onaylandi ve yayinlandi.\n\n"
+                f"Reklam ID: {order_id}\n"
+                f"Gonderilen kanal/grup: {len(sent)}\n\n"
+                f"Yayin linkleri:\n{links_text[:1500]}"
             )
         except Exception:
             pass
     else:
-        await change_ad_balance(order.get("user_id"), int(order.get("price") or 0), "ad_auto_refund", "Reklam yayinlanamadi, otomatik iade", order_id)
+        await change_ad_balance(
+            order.get("user_id"),
+            int(order.get("price") or 0),
+            "ad_auto_refund",
+            "Reklam yayinlanamadi, otomatik iade",
+            order_id,
+        )
         supabase.table("ad_orders").update({"status": "failed_refunded", "reject_reason": "; ".join(errors)[:900]}).eq("id", order_id).execute()
-        await log_event("ad_publish_failed_refunded", admin_id, order.get("user_id"), details=f"order_id={order_id}")
+        await log_event("ad_publish_failed_refunded", admin_id, order.get("user_id"), channel_id=order.get("channel_id"), details=f"order_id={order_id}")
         await message.reply_text("Reklam yayinlanamadi. Bakiye otomatik iade edildi. Botun kanalda admin ve mesaj gonderme yetkisi oldugunu kontrol et.")
 
 async def reject_and_refund_ad(message, order_id, admin_id, reason="Admin reddetti"):
@@ -2859,7 +3075,7 @@ async def system_test_message(message, context):
     checks = []
     def ok(name): checks.append(f"â {name}")
     def bad(name, err): checks.append(f"â {name}: {str(err)[:120]}")
-    for table in ["users", "channels", "ad_balances", "ad_packages", "ad_orders", "ad_transactions", "settings"]:
+    for table in ["users", "channels", "ad_balances", "ad_orders", "ad_transactions", "settings"]:
         try:
             supabase.table(table).select("*").limit(1).execute()
             ok(f"{table} tablosu")
