@@ -54,11 +54,12 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
+        ["\U0001f680 H\u0131zl\u0131 Ba\u015fla", "\U0001f4cc Durumum"],
         ["\U0001f4e2 VIP Kanallar", "\U0001f4e6 Paketler"],
+        ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
         ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
         ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
-        ["\U0001f4b0 Bakiye"],
         ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
@@ -68,11 +69,12 @@ MAIN_MENU = ReplyKeyboardMarkup(
 ADMIN_MENU = ReplyKeyboardMarkup(
     [
         ["\U0001f451 Admin Panel"],
+        ["\U0001f680 H\u0131zl\u0131 Ba\u015fla", "\U0001f4cc Durumum"],
         ["\U0001f4e2 VIP Kanallar", "\U0001f4e6 Paketler"],
+        ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
         ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
         ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
-        ["\U0001f4b0 Bakiye"],
         ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
@@ -80,6 +82,9 @@ ADMIN_MENU = ReplyKeyboardMarkup(
 )
 
 LABEL_TO_KEY = {
+    "\\U0001f680 H\\u0131zl\\u0131 Ba\\u015fla": "Hizli Basla",
+    "\\U0001f680 Hizli Basla": "Hizli Basla",
+    "\\U0001f4cc Durumum": "Durumum",
     "\U0001f451 Admin Panel": "Admin Panel",
     "\U0001f4e2 VIP Kanallar": "VIP Kanallar",
     "\U0001f4e6 Paketler": "Paketler",
@@ -109,6 +114,9 @@ LABEL_TO_KEY = {
     "\u2139\ufe0f Yardim": "Yardim",
     "\u2139 Yardim": "Yardim",
     "Admin Panel": "Admin Panel",
+    "Hizli Basla": "Hizli Basla",
+    "HÄ±zlÄ± BaÅla": "Hizli Basla",
+    "Durumum": "Durumum",
     "VIP Kanallar": "VIP Kanallar",
     "Paketler": "Paketler",
     "Uyeligim": "Uyeligim",
@@ -549,6 +557,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\U0001f44b Pasha VIP admin sistemine ho\u015f geldin." if is_admin(user.id) else "\U0001f44b Pasha VIP sistemine ho\u015f geldin.",
         reply_markup=ADMIN_MENU if is_admin(user.id) else MAIN_MENU,
     )
+    await quick_start_message(update.message, is_admin(user.id))
 
 
 async def channel_id_reader(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -591,7 +600,11 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\U0001f527 Bot bak\u0131m modunda. L\u00fctfen daha sonra tekrar dene.")
         return
 
-    if is_admin(user_id) and text == "Admin Panel":
+    if text == "Hizli Basla":
+        await quick_start_message(update.message, is_admin(user_id))
+    elif text == "Durumum":
+        await user_status_message(update.message, user_id)
+    elif is_admin(user_id) and text == "Admin Panel":
         await open_admin_panel(update.message)
     elif text == "VIP Kanallar":
         await show_vip_channels(update.message, user_id)
@@ -648,6 +661,111 @@ async def help_message(message):
 # ADMIN PANEL
 # =========================================================
 
+
+
+def test_mode_on():
+    return get_setting("test_mode", "off") == "on"
+
+
+def normalize_ad_link(link):
+    link = (link or "").strip()
+    if link.startswith("@"):
+        return "https://t.me/" + link[1:]
+    if link.startswith("t.me/"):
+        return "https://" + link
+    if link.startswith("https://") or link.startswith("http://"):
+        return link
+    return None
+
+
+def validate_ad_fields(title, body, link):
+    title = (title or "").strip()
+    body = (body or "").strip()
+    clean_link = normalize_ad_link(link)
+    if len(title) < 3:
+        return False, "Baslik cok kisa. En az 3 karakter yaz.", None
+    if len(title) > 80:
+        return False, "Baslik cok uzun. En fazla 80 karakter yaz.", None
+    if len(body) < 10:
+        return False, "Metin cok kisa. En az 10 karakter yaz.", None
+    if len(body) > 700:
+        return False, "Metin cok uzun. En fazla 700 karakter yaz.", None
+    if not clean_link:
+        return False, "Link gecersiz. https:// veya t.me/ ile baslamali.", None
+    return True, "OK", clean_link
+
+
+async def quick_start_message(message, admin=False):
+    kb = [
+        [InlineKeyboardButton("\u2b50 VIP Sat\u0131n Al", callback_data="quick_vip")],
+        [InlineKeyboardButton("\U0001f4e3 Reklam Ver", callback_data="quick_ads")],
+        [InlineKeyboardButton("\U0001f4cc Durumum", callback_data="quick_status")],
+        [InlineKeyboardButton("\U0001f198 Destek", callback_data="quick_support")],
+    ]
+    if admin:
+        kb.insert(0, [InlineKeyboardButton("\U0001f451 Admin Panel", callback_data="admin_panel_open")])
+    await message.reply_text(
+        "\U0001f680 H\u0131zl\u0131 Ba\u015fla\n\n"
+        "Ne yapmak istiyorsun?",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+
+
+async def user_status_message(message, user_id):
+    balance = await get_ad_balance(user_id)
+    active_subs = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
+    ad_orders = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).execute().data or []
+    user_row = await get_user_row(user_id)
+    coupon = (user_row or {}).get("active_coupon") or "Yok"
+    pending_ads = len([o for o in ad_orders if o.get("status") == "pending"])
+    published_ads = len([o for o in ad_orders if o.get("status") == "published"])
+    rejected_ads = len([o for o in ad_orders if str(o.get("status") or "").startswith("rejected") or "refunded" in str(o.get("status") or "")])
+
+    lines = ["\U0001f4cc Durumum", ""]
+    lines.append(f"\U0001f4b0 Reklam bakiyesi: {balance} Stars")
+    lines.append(f"\U0001f39f\ufe0f Aktif kupon: {coupon}")
+    lines.append(f"\U0001f4e3 Bekleyen reklam: {pending_ads}")
+    lines.append(f"\u2705 Yay\u0131nlanan reklam: {published_ads}")
+    lines.append(f"\u274c Reddedilen/iade edilen reklam: {rejected_ads}")
+    lines.append("")
+    if active_subs:
+        lines.append("\U0001f4c5 Aktif VIP \u00fcyelikler:")
+        for sub in active_subs[:5]:
+            ch = await get_channel(sub.get("channel_id"))
+            name = (ch or {}).get("name") or f"Kanal ID {sub.get('channel_id')}"
+            lines.append(f"- {name}: {sub.get('end_date')}")
+    else:
+        lines.append("\U0001f4c5 Aktif VIP \u00fcyelik: Yok")
+
+    kb = [
+        [InlineKeyboardButton("\U0001f4e2 VIP Sat\u0131n Al", callback_data="quick_vip")],
+        [InlineKeyboardButton("\U0001f4e3 Reklam Ver", callback_data="quick_ads")],
+        [InlineKeyboardButton("\U0001f4c4 Reklamlar\u0131m", callback_data="ad_my_orders")],
+    ]
+    await message.reply_text("\n".join(lines)[:3900], reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def pending_work_message(message):
+    pending_ads = supabase.table("ad_orders").select("*").eq("status", "pending").execute().data or []
+    failed_ads = supabase.table("ad_orders").select("*").in_("status", ["failed", "failed_refunded"]).execute().data or []
+    supports = supabase.table("support_requests").select("*").eq("status", "open").execute().data or []
+    cancels = supabase.table("cancel_requests").select("*").eq("status", "pending").execute().data or []
+
+    kb = [
+        [InlineKeyboardButton(f"\U0001f4e3 Reklam Talepleri ({len(pending_ads)})", callback_data="admin_ads")],
+        [InlineKeyboardButton(f"\U0001f198 Destek ({len(supports)})", callback_data="admin_support")],
+        [InlineKeyboardButton(f"\u274c \u0130ptal Talepleri ({len(cancels)})", callback_data="admin_cancel")],
+        [InlineKeyboardButton(f"\u26a0\ufe0f Yay\u0131nlanamayan Reklam ({len(failed_ads)})", callback_data="admin_ad_stats")],
+    ]
+    await message.reply_text(
+        "\U0001f4cc Bekleyen \u0130\u015fler\n\n"
+        f"Bekleyen reklam: {len(pending_ads)}\n"
+        f"A\u00e7\u0131k destek: {len(supports)}\n"
+        f"Bekleyen iptal: {len(cancels)}\n"
+        f"Yay\u0131nlanamayan reklam: {len(failed_ads)}",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+
 async def admin_dashboard_text():
     today = now_utc().date().isoformat()
     month = now_utc().strftime("%Y-%m")
@@ -701,9 +819,11 @@ async def open_admin_panel(message):
         [InlineKeyboardButton("\U0001f465 Kullan\u0131c\u0131lar", callback_data="admin_users"), InlineKeyboardButton("\U0001f50d Kullan\u0131c\u0131 Ara", callback_data="admin_search_user")],
         [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
         [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals"), InlineKeyboardButton("\U0001f389 \u00c7ekili\u015f Paneli", callback_data="admin_giveaway")],
+        [InlineKeyboardButton("\U0001f4cc Bekleyen \u0130\u015fler", callback_data="admin_pending_work")],
         [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4b8 Reklam Fiyatlari", callback_data="admin_ad_channel_prices")],
         [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances")],
         [InlineKeyboardButton("\U0001f4ca Reklam Istatistikleri", callback_data="admin_ad_stats"), InlineKeyboardButton("\U0001f9ea Sistem Testi", callback_data="admin_system_test")],
+        [InlineKeyboardButton("\U0001f9ea Test Modu A\u00e7/Kapat", callback_data="admin_test_mode")],
         [InlineKeyboardButton("\u2753 SSS Y\u00f6net", callback_data="admin_faq"), InlineKeyboardButton("\U0001f198 Destek Talepleri", callback_data="admin_support")],
         [InlineKeyboardButton("\u274c \u0130ptal Talepleri", callback_data="admin_cancel"), InlineKeyboardButton("\U0001f6ab Kara Liste", callback_data="admin_blacklist")],
         [InlineKeyboardButton("\U0001f46e Adminler", callback_data="admin_admins"), InlineKeyboardButton("\U0001f4dc \u0130\u015flem Loglar\u0131", callback_data="admin_logs")],
@@ -998,7 +1118,49 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             await update.message.reply_text(" Reklam paketi eklendi.")
 
+        elif mode == "ad_single_message":
+            parts = [p.strip() for p in raw_text.split("|")]
+            if len(parts) < 3:
+                await update.message.reply_text("Format: Baslik | Metin | Link")
+                return
+            title, body, link = parts[0], parts[1], parts[2]
+            ok, msg, clean_link = validate_ad_fields(title, body, link)
+            if not ok:
+                await update.message.reply_text(msg)
+                return
+            context.user_data["ad_title"] = title
+            context.user_data["ad_text"] = body
+            context.user_data["ad_link"] = clean_link
+            context.user_data["mode"] = "ad_image"
+            await update.message.reply_text(
+                "Reklam hazir. Gorsel eklemek istersen foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
+            )
+
+        elif mode == "ad_template_prompt":
+            parts = [p.strip() for p in raw_text.split("|")]
+            if len(parts) < 3:
+                await update.message.reply_text("Format: Baslik | Kisa aciklama | Link")
+                return
+            title, short_desc, link = parts[0], parts[1], parts[2]
+            body = f"{short_desc}\n\nDetaylar icin asagidaki butona bas."
+            ok, msg, clean_link = validate_ad_fields(title, body, link)
+            if not ok:
+                await update.message.reply_text(msg)
+                return
+            context.user_data["ad_title"] = title
+            context.user_data["ad_text"] = body
+            context.user_data["ad_link"] = clean_link
+            context.user_data["mode"] = "ad_image"
+            await update.message.reply_text(
+                "Hazir reklam olusturuldu. Gorsel eklemek istersen foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
+            )
+
         elif mode == "ad_title":
+            if len(raw_text) < 3:
+                await update.message.reply_text("Baslik cok kisa. En az 3 karakter yaz.")
+                return
             if len(raw_text) > 80:
                 await update.message.reply_text(" Baslik cok uzun. En fazla 80 karakter yaz.")
                 return
@@ -1007,6 +1169,9 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(" Reklam metnini yaz. En fazla 700 karakter.")
 
         elif mode == "ad_text":
+            if len(raw_text) < 10:
+                await update.message.reply_text("Metin cok kisa. En az 10 karakter yaz.")
+                return
             if len(raw_text) > 700:
                 await update.message.reply_text(" Metin cok uzun. En fazla 700 karakter yaz.")
                 return
@@ -1015,17 +1180,16 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(" Hedef linki yaz. Ornek: https://t.me/kanal veya https://site.com")
 
         elif mode == "ad_link":
-            link = raw_text.strip()
-            if not (link.startswith("https://") or link.startswith("http://") or link.startswith("t.me/") or link.startswith("@")):
+            clean_link = normalize_ad_link(raw_text.strip())
+            if not clean_link:
                 await update.message.reply_text(" Link gecersiz. https:// veya t.me/ ile baslayan bir link yaz.")
                 return
-            if link.startswith("@"):
-                link = "https://t.me/" + link[1:]
-            elif link.startswith("t.me/"):
-                link = "https://" + link
-            context.user_data["ad_link"] = link
+            context.user_data["ad_link"] = clean_link
             context.user_data["mode"] = "ad_image"
-            await update.message.reply_text("Gorsel eklemek istersen simdi foto gonder. Gorselsiz devam etmek icin skip yaz.")
+            await update.message.reply_text(
+                "Gorsel eklemek istersen simdi foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
+            )
 
         elif mode == "ad_image":
             if raw_text.lower() in ["skip", "gec", "yok", "hayir"]:
@@ -1182,6 +1346,62 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await query.message.reply_text(" Reklam talebi iptal edildi.")
         return
+    if data == "quick_vip":
+        await show_vip_channels(query.message, user_id)
+        return
+    if data == "quick_ads":
+        await show_balance_center(query.message, user_id)
+        return
+    if data == "quick_status":
+        await user_status_message(query.message, user_id)
+        return
+    if data == "quick_support":
+        await support_menu(query.message)
+        return
+    if data == "admin_panel_open":
+        if is_admin(user_id):
+            await open_admin_panel(query.message)
+        else:
+            await query.message.reply_text("Yetkin yok.")
+        return
+    if data == "ad_method_single":
+        if not context.user_data.get("ad_channel_id"):
+            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
+            return
+        context.user_data["mode"] = "ad_single_message"
+        await query.message.reply_text(
+            "Reklamini tek mesajda gonder:\n\n"
+            "Baslik | Metin | Link\n\n"
+            "Ornek:\n"
+            "Yeni Kanal | Guncel paylasimlar icin hemen incele | https://t.me/kanal"
+        )
+        return
+    if data == "ad_method_template":
+        if not context.user_data.get("ad_channel_id"):
+            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
+            return
+        context.user_data["mode"] = "ad_template_prompt"
+        await query.message.reply_text(
+            "Hazir reklam olusturmak icin yaz:\n\n"
+            "Baslik | Kisa aciklama | Link\n\n"
+            "Ornek:\n"
+            "Yeni Kanal | Guncel icerikler ve ozel paylasimlar | https://t.me/kanal"
+        )
+        return
+    if data == "ad_method_step":
+        if not context.user_data.get("ad_channel_id"):
+            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
+            return
+        context.user_data["mode"] = "ad_title"
+        await query.message.reply_text("Simdi reklam basligini yaz. Ornek: Yeni VIP Kanal")
+        return
+    if data == "ad_no_image":
+        if context.user_data.get("mode") != "ad_image":
+            await query.message.reply_text("Aktif gorsel adimi yok.")
+            return
+        context.user_data["ad_image_file_id"] = None
+        await preview_ad_order(query.message, context)
+        return
 
     # protected callbacks
     if not is_admin(user_id):
@@ -1199,6 +1419,21 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         supabase.table("support_requests").update({"status": "closed"}).eq("id", rid).execute()
         await log_event("support_closed", user_id, details=f"request_id={rid}")
         await query.message.reply_text(" Destek talebi kapatildi.")
+        return
+    if data.startswith("ad_reject_reason_"):
+        if not can_manage(user_id):
+            await query.message.reply_text(" Yetkin yok.")
+            return
+        parts = data.split("_")
+        reason_code = parts[3]
+        order_id = int(parts[4])
+        reason_map = {
+            "content": "Uygunsuz icerik",
+            "link": "Link hatali",
+            "missing": "Eksik bilgi",
+            "rules": "Kurallara aykiri",
+        }
+        await reject_and_refund_ad(query.message, order_id, user_id, reason_map.get(reason_code, "Admin reddetti"))
         return
 
     try:
@@ -1267,6 +1502,13 @@ async def admin_callback(query, context, data):
         await referrals_admin_message(query.message)
     elif data == "admin_giveaway":
         await giveaway_admin_message(query.message)
+    elif data == "admin_pending_work":
+        await pending_work_message(query.message)
+    elif data == "admin_test_mode":
+        current = test_mode_on()
+        set_setting("test_mode", "off" if current else "on")
+        await log_event("test_mode_toggled", user_id, details="off" if current else "on")
+        await query.message.reply_text("Test modu degistirildi: " + ("KAPALI" if current else "ACIK"))
     elif data == "admin_ads":
         await ad_orders_admin_message(query.message)
     elif data == "admin_ad_channel_prices":
@@ -2558,7 +2800,7 @@ async def start_ad_order_channel(query, context):
     price = get_channel_ad_price(ch)
     balance = await get_ad_balance(query.from_user.id)
 
-    if balance < price:
+    if balance < price and not (test_mode_on() and is_admin(query.from_user.id)):
         await query.message.reply_text(
             f"Bakiyen yetersiz.\n\n"
             f"Bu kanal reklam fiyati: {price} Stars\n"
@@ -2568,15 +2810,22 @@ async def start_ad_order_channel(query, context):
         return
 
     context.user_data.clear()
-    context.user_data["mode"] = "ad_title"
     context.user_data["ad_channel_id"] = channel_id
     context.user_data["ad_price"] = price
     context.user_data["ad_channel_name"] = ch.get("name") or f"Kanal ID {channel_id}"
 
+    kb = [
+        [InlineKeyboardButton("\u26a1 Tek Mesajla Reklam", callback_data="ad_method_single")],
+        [InlineKeyboardButton("\u2728 Haz\u0131r Reklam Olu\u015ftur", callback_data="ad_method_template")],
+        [InlineKeyboardButton("\u270d\ufe0f Ad\u0131m Ad\u0131m Olu\u015ftur", callback_data="ad_method_step")],
+        [InlineKeyboardButton("\u274c \u0130ptal", callback_data="ad_cancel")],
+    ]
+
     await query.message.reply_text(
-        f"Reklam kanali secildi: {ch.get('name')}\n"
+        f"Reklam kanalÄ± seÃ§ildi: {ch.get('name')}\n"
         f"Fiyat: {price} Stars\n\n"
-        f"Simdi reklam basligini yaz. Ornek: Yeni VIP Kanal"
+        "NasÄ±l reklam oluÅturmak istiyorsun?",
+        reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
@@ -2643,9 +2892,10 @@ async def submit_ad_order(query, context):
         return
 
     price = int(context.user_data.get("ad_price") or get_channel_ad_price(ch))
+    test_order = test_mode_on() and is_admin(query.from_user.id)
     balance = await get_ad_balance(query.from_user.id)
 
-    if balance < price:
+    if balance < price and not test_order:
         context.user_data.clear()
         await query.message.reply_text(
             f"Bakiyen yetersiz. Islem iptal edildi.\n\n"
@@ -2654,16 +2904,19 @@ async def submit_ad_order(query, context):
         )
         return
 
-    ok = await change_ad_balance(
-        query.from_user.id,
-        -price,
-        "ad_hold",
-        f"Reklam talebi icin bakiye dusuldu: {ch.get('name')}",
-    )
-    if not ok:
-        context.user_data.clear()
-        await query.message.reply_text("Bakiye dusulemedi. Islem iptal edildi.")
-        return
+    if not test_order:
+        ok = await change_ad_balance(
+            query.from_user.id,
+            -price,
+            "ad_hold",
+            f"Reklam talebi icin bakiye dusuldu: {ch.get('name')}",
+        )
+        if not ok:
+            context.user_data.clear()
+            await query.message.reply_text("Bakiye dusulemedi. Islem iptal edildi.")
+            return
+    else:
+        price = 0
 
     order = {
         "user_id": query.from_user.id,
@@ -2697,6 +2950,7 @@ async def submit_ad_order(query, context):
         f"Kanal: {ch.get('name')}\n"
         f"Kesilen bakiye: {price} Stars\n"
         f"Kalan bakiye: {await get_ad_balance(query.from_user.id)} Stars"
+        + ("\n\nTest modu aktif: admin reklamindan bakiye dusulmedi." if test_order else "")
     )
 
     try:
@@ -2763,6 +3017,14 @@ async def ad_orders_admin_message(message):
             [
                 InlineKeyboardButton("Onayla ve Yayinla", callback_data=f"ad_approve_{o['id']}"),
                 InlineKeyboardButton("Reddet ve Iade", callback_data=f"ad_reject_{o['id']}"),
+            ],
+            [
+                InlineKeyboardButton("Uygunsuz", callback_data=f"ad_reject_reason_content_{o['id']}"),
+                InlineKeyboardButton("Link Hatali", callback_data=f"ad_reject_reason_link_{o['id']}"),
+            ],
+            [
+                InlineKeyboardButton("Eksik Bilgi", callback_data=f"ad_reject_reason_missing_{o['id']}"),
+                InlineKeyboardButton("Kurallara Aykiri", callback_data=f"ad_reject_reason_rules_{o['id']}"),
             ],
             [InlineKeyboardButton("Goruntulenme Gir", callback_data=f"ad_views_{o['id']}")],
         ]
