@@ -494,6 +494,145 @@ async def ai_generate_ad_from_prompt(prompt_text):
     return title, body, link, raw
 
 
+async def ai_generate_ad_variations(prompt_text):
+    """Return up to 3 safe ad options: short, sales-focused, trust-focused."""
+    instructions = (
+        "Sen Telegram reklami icin kisa ve net metinler yazan asistansin. "
+        "Yasal, guvenli, yaniltici olmayan, abartisiz reklam yaz. "
+        "Yetiskin veya hassas icerik varsa acik/uygunsuz detay yazma; notr dil kullan. "
+        "Kullanici riskli/izinsiz icerik isterse metni notr ve guvenli hale getir; yasa disi vaat yazma. "
+        "Cevabi sadece JSON olarak ver. Format: "
+        "{\"options\":[{\"label\":\"Kisa ve net\",\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"},"
+        "{\"label\":\"Satis odakli\",\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"},"
+        "{\"label\":\"Guven veren\",\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"}]} "
+        "title en fazla 60 karakter, text en fazla 350 karakter olsun."
+    )
+    raw = await ai_text(instructions, prompt_text, max_output_tokens=900)
+    data = extract_json_object(raw) or {}
+    options = data.get("options") or []
+
+    cleaned = []
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        title = str(opt.get("title") or "").strip()
+        body = str(opt.get("text") or opt.get("body") or "").strip()
+        link = str(opt.get("link") or "").strip()
+        label = str(opt.get("label") or f"Secenek {len(cleaned)+1}").strip()
+        ok, _msg, clean_link = validate_ad_fields(title, body, link)
+        if ok:
+            cleaned.append({"label": label, "title": title, "text": body, "link": clean_link})
+        if len(cleaned) >= 3:
+            break
+
+    if not cleaned:
+        title, body, link, _raw = await ai_generate_ad_from_prompt(prompt_text)
+        ok, _msg, clean_link = validate_ad_fields(title, body, link)
+        if ok:
+            cleaned.append({"label": "AI onerisi", "title": title, "text": body, "link": clean_link})
+
+    return cleaned, raw
+
+
+def _safe_table_rows(table_name, limit=2000):
+    try:
+        return supabase.table(table_name).select("*").limit(limit).execute().data or []
+    except Exception:
+        return []
+
+
+async def build_daily_business_snapshot():
+    today = now_utc().date().isoformat()
+    yesterday = (now_utc() - timedelta(days=1)).date().isoformat()
+
+    sales = _safe_table_rows("sales")
+    users = _safe_table_rows("users")
+    subs = _safe_table_rows("subscriptions")
+    supports = _safe_table_rows("support_requests")
+    cancel_reqs = _safe_table_rows("cancel_requests")
+    coupons = _safe_table_rows("coupons")
+    ad_orders = _safe_table_rows("ad_orders")
+    ad_tx = _safe_table_rows("ad_transactions")
+    blacklist = _safe_table_rows("blacklist")
+    try:
+        abandoned = supabase.table("checkout_intents").select("*").eq("status", "started").eq("reminder_sent", False).execute().data or []
+    except Exception:
+        abandoned = []
+
+    def starts(row, key, prefix):
+        return str(row.get(key) or "").startswith(prefix)
+
+    def sum_price(rows):
+        total = 0
+        for r in rows:
+            if r.get("refund_status") == "refunded":
+                continue
+            total += safe_int(r.get("price"), 0)
+        return total
+
+    sales_today = [s for s in sales if starts(s, "created_at", today)]
+    sales_yesterday = [s for s in sales if starts(s, "created_at", yesterday)]
+    new_users_today = [u for u in users if starts(u, "created_at", today)]
+    active_subs = [s for s in subs if s.get("status") == "active"]
+    expired_today = [s for s in subs if s.get("status") == "expired" and starts(s, "created_at", today)]
+
+    expiring_today = []
+    expiring_3d = []
+    current = now_utc()
+    for sub in active_subs:
+        end = parse_dt(sub.get("end_date"))
+        if not end:
+            continue
+        if end.date() == current.date():
+            expiring_today.append(sub)
+        if current <= end <= current + timedelta(days=3):
+            expiring_3d.append(sub)
+
+    support_open = [s for s in supports if s.get("status") == "open"]
+    cancel_pending = [c for c in cancel_reqs if c.get("status") == "pending"]
+    coupons_used = [c for c in coupons if safe_int(c.get("used_count"), 0) > 0]
+    ad_pending = [a for a in ad_orders if a.get("status") == "pending"]
+    ad_failed = [a for a in ad_orders if a.get("status") == "failed"]
+    ad_tx_today = [t for t in ad_tx if starts(t, "created_at", today)]
+    blacklisted = [b for b in blacklist if b.get("active")]
+
+    return (
+        f"Bugun tarih: {today}\n"
+        f"VIP satis bugun: {len(sales_today)} adet / {sum_price(sales_today)} Stars\n"
+        f"VIP satis dun: {len(sales_yesterday)} adet / {sum_price(sales_yesterday)} Stars\n"
+        f"Yeni kullanici bugun: {len(new_users_today)}\n"
+        f"Aktif uyelik: {len(active_subs)}\n"
+        f"Bugun bitecek uyelik: {len(expiring_today)}\n"
+        f"3 gun icinde bitecek uyelik: {len(expiring_3d)}\n"
+        f"Bugun suresi biten uyelik kaydi: {len(expired_today)}\n"
+        f"Acik destek talebi: {len(support_open)}\n"
+        f"Bekleyen iptal talebi: {len(cancel_pending)}\n"
+        f"Kupon kullanilmis kupon sayisi: {len(coupons_used)}\n"
+        f"Yarim kalan odeme: {len(abandoned)}\n"
+        f"Reklam bakiye hareketi bugun: {len(ad_tx_today)}\n"
+        f"Bekleyen reklam talebi: {len(ad_pending)}\n"
+        f"Yayinlanamayan reklam: {len(ad_failed)}\n"
+        f"Kara listedeki aktif kullanici: {len(blacklisted)}\n"
+        f"Bakim modu: {'ACIK' if maintenance_on() else 'KAPALI'}\n"
+        f"Test modu: {'ACIK' if test_mode_on() else 'KAPALI'}"
+    )
+
+
+async def ai_daily_business_summary():
+    snapshot = await build_daily_business_snapshot()
+    instructions = (
+        "Sen Telegram VIP/reklam botu icin admin isletme asistanisin. "
+        "Reklama odaklanma; butun sistemi dengeli yorumla: VIP satis, uyelik, kullanici, destek, kupon, risk, reklam/bakiye. "
+        "Cok uzun yazma. En fazla 12 satir. Sonda mutlaka 'Bugun yapilacak 3 is' basligi olsun. "
+        "Net, pratik ve karar almaya yardimci ol."
+    )
+    try:
+        return await ai_text(instructions, snapshot, max_output_tokens=650)
+    except Exception as e:
+        logger.error("AI gunluk ozet hatasi: %s", e)
+        return "AI ozet alinamadi. Genel panel ozeti:\n\n" + await admin_dashboard_text()
+
+
 async def ai_check_ad_content(title, body, link):
     instructions = (
         "Sen Telegram reklam moderatorusun. Reklami kisa kontrol et. "
@@ -998,6 +1137,7 @@ async def open_admin_panel(message):
         [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
         [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals")],
         [InlineKeyboardButton("\U0001f4cc Bekleyen \u0130\u015fler", callback_data="admin_pending_work")],
+        [InlineKeyboardButton("\U0001f916 AI G\u00fcnl\u00fck \u00d6zet", callback_data="admin_ai_summary")],
         [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4b8 Reklam Fiyatlari", callback_data="admin_ad_channel_prices")],
         [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances")],
         [InlineKeyboardButton("\U0001f4ca Reklam Istatistikleri", callback_data="admin_ad_stats"), InlineKeyboardButton("\U0001f9ea Sistem Testi", callback_data="admin_system_test")],
@@ -1403,35 +1543,33 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.clear()
                 await update.message.reply_text(ai_missing_text())
                 return
-            await update.message.reply_text("Yapay zeka reklam metnini hazirliyor...")
+            await update.message.reply_text("Yapay zeka 3 reklam onerisi hazirliyor...")
             try:
-                title, body, link, raw_ai = await ai_generate_ad_from_prompt(raw_text)
-                ok, msg, clean_link = validate_ad_fields(title, body, link)
-                if not ok:
+                options, raw_ai = await ai_generate_ad_variations(raw_text)
+                if not options:
                     context.user_data["mode"] = "ad_ai_prompt"
                     await update.message.reply_text(
-                        "AI metni olusturdu ama link/baslik/metin eksik gorunuyor. Tekrar yaz:\n\n"
+                        "AI uygun reklam metni uretemedi. Daha net yaz:\n\n"
                         "Ornek: Yeni kanal icin reklam, konu: teknoloji, link: https://t.me/kanal"
                     )
                     return
-                context.user_data["ai_ad_title"] = title
-                context.user_data["ai_ad_text"] = body
-                context.user_data["ai_ad_link"] = clean_link
-                kb = [
-                    [InlineKeyboardButton("AI Metnini Kullan", callback_data="ad_ai_use")],
-                    [InlineKeyboardButton("Yeniden Yazdir", callback_data="ad_ai_retry"), InlineKeyboardButton("Iptal", callback_data="ad_cancel")],
-                ]
-                await update.message.reply_text(
-                    f"\u2728 AI reklam onerisi\n\n"
-                    f"Baslik: {title}\n\n"
-                    f"Metin:\n{body}\n\n"
-                    f"Link: {clean_link}",
-                    reply_markup=InlineKeyboardMarkup(kb),
-                )
+                context.user_data["ai_ad_options"] = options
+                lines = ["\u2728 AI reklam onerileri\n"]
+                kb = []
+                for idx, opt in enumerate(options, start=1):
+                    lines.append(
+                        f"{idx}) {opt.get('label') or 'Secenek'}\n"
+                        f"Baslik: {opt['title']}\n"
+                        f"Metin: {opt['text']}\n"
+                        f"Link: {opt['link']}\n"
+                    )
+                    kb.append([InlineKeyboardButton(f"{idx}. metni kullan", callback_data=f"ad_ai_use_{idx-1}")])
+                kb.append([InlineKeyboardButton("Yeniden Yazdir", callback_data="ad_ai_retry"), InlineKeyboardButton("Iptal", callback_data="ad_cancel")])
+                await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
             except Exception as e:
-                logger.error("AI reklam hatasi: %s", e)
+                logger.error("AI reklam varyasyon hatasi: %s", e)
                 context.user_data.clear()
-                await update.message.reply_text("AI reklam olusturulamadi. GROQ_API_KEY / AI_MODEL ve Railway loglarini kontrol et.")
+                await update.message.reply_text("AI reklam olusturulamadi. GROQ_API_KEY / AI_MODEL ve Railway loglarini kontrol et. Bu islem iptal edildi.")
 
         elif mode == "ai_support_question":
             if not ai_available():
@@ -1442,10 +1580,13 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 answer = await ai_support_reply(raw_text, user_id)
                 context.user_data.clear()
-                kb = [[InlineKeyboardButton("Admin ile Konus", callback_data="support_auto_admin")]]
+                kb = [
+                    [InlineKeyboardButton("Sorunum cozuldu", callback_data="support_auto_solved")],
+                    [InlineKeyboardButton("Admin ile Konus", callback_data="support_auto_admin")],
+                ]
                 await update.message.reply_text(
                     f"\U0001f916 AI Destek Cevabi\n\n{answer}\n\n"
-                    "Sorun cozulmediyse Admin ile Konus butonuna bas.",
+                    "Cozulduyse ilk butona, cozulmediyse Admin ile Konus butonuna bas.",
                     reply_markup=InlineKeyboardMarkup(kb),
                 )
             except Exception as e:
@@ -1726,10 +1867,21 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "ad_ai_prompt"
         await query.message.reply_text("Reklami tekrar kisaca anlat ve linki ekle:")
         return
-    if data == "ad_ai_use":
-        title = context.user_data.get("ai_ad_title")
-        body = context.user_data.get("ai_ad_text")
-        link = context.user_data.get("ai_ad_link")
+    if data.startswith("ad_ai_use"):
+        options = context.user_data.get("ai_ad_options") or []
+        idx = 0
+        parts = data.split("_")
+        if len(parts) >= 4 and parts[-1].isdigit():
+            idx = int(parts[-1])
+        if options and 0 <= idx < len(options):
+            selected = options[idx]
+            title = selected.get("title")
+            body = selected.get("text")
+            link = selected.get("link")
+        else:
+            title = context.user_data.get("ai_ad_title")
+            body = context.user_data.get("ai_ad_text")
+            link = context.user_data.get("ai_ad_link")
         ok, msg, clean_link = validate_ad_fields(title or "", body or "", link or "")
         if not ok:
             await query.message.reply_text("AI metni eksik gorunuyor. Yeniden yazdir.")
@@ -1852,6 +2004,10 @@ async def admin_callback(query, context, data):
         await sales_message(query.message)
     elif data == "admin_report":
         await report_message(query.message)
+    elif data == "admin_ai_summary":
+        await query.message.reply_text("AI genel gunluk ozet hazirlaniyor...")
+        summary = await ai_daily_business_summary()
+        await query.message.reply_text(f"\U0001f916 AI Gunluk Ozet\n\n{summary}")
     elif data == "admin_channel_stats":
         await channel_stats_message(query.message)
     elif data == "admin_abandoned":
@@ -2691,6 +2847,7 @@ async def support_auto_answer(message, key):
         "date": "Uyeligim bolumunde baslangic ve bitis tarihini gorebilirsin.",
         "coupon": " Kupon kodunu Kupon Gir bolumunden yaz. Bazi kuponlar sadece belirli kanal icin gecerli olabilir.",
         "admin": " Sorununu tek mesaj olarak yaz; admin'e iletilecek.",
+        "solved": "Tamam, sorun cozuldu olarak kabul edildi. Tekrar yardim gerekirse Destek bolumunu kullanabilirsin.",
     }
     if key == "admin":
         # mode is per user, but we only have message here. A new text will go to menu without mode. Ask user to use Destek menu.
@@ -3984,10 +4141,16 @@ async def abandoned_checkout_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def daily_report_job(context: ContextTypes.DEFAULT_TYPE):
+    """Send a compact AI business report to owner. Scheduled twice a day."""
     try:
-        await context.bot.send_message(OWNER_ID, f" Gunluk Rapor\n\n{await admin_dashboard_text()}")
-    except Exception:
-        pass
+        summary = await ai_daily_business_summary()
+        await context.bot.send_message(OWNER_ID, f"\U0001f916 AI Gunluk Ozet\n\n{summary}")
+    except Exception as e:
+        logger.error("Gunluk AI rapor gonderilemedi: %s", e)
+        try:
+            await context.bot.send_message(OWNER_ID, f"Gunluk Rapor\n\n{await admin_dashboard_text()}")
+        except Exception:
+            pass
 
 
 
@@ -4031,6 +4194,6 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
 app.job_queue.run_repeating(expire_old_subscriptions_job, interval=3600, first=30)
 app.job_queue.run_repeating(warning_job, interval=21600, first=60)
 app.job_queue.run_repeating(abandoned_checkout_job, interval=1800, first=300)
-app.job_queue.run_repeating(daily_report_job, interval=86400, first=120)
+app.job_queue.run_repeating(daily_report_job, interval=43200, first=600)
 print("Pasha VIP sade sistem calisiyor...")
 app.run_polling()
