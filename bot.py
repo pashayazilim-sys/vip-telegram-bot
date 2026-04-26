@@ -5,6 +5,7 @@ import csv
 import random
 import asyncio
 import logging
+import json
 from datetime import datetime, timedelta
 
 from telegram import (
@@ -25,6 +26,11 @@ from telegram.ext import (
 )
 from supabase import create_client
 
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
+
 # =========================================================
 # PASHA VIP BOT - V6 FIXED
 # Only /start is used. Everything else is buttons + guided text.
@@ -34,6 +40,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID", "957422314"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 DEFAULT_DURATION_DAYS = 30
 INVITE_LINK_EXPIRE_MINUTES = 30
@@ -349,6 +357,97 @@ async def log_event(action, actor_id=None, target_user_id=None, channel_id=None,
         ).execute()
     except Exception as e:
         logger.warning("Log yazilamadi: %s", e)
+
+def ai_available():
+    return bool(OPENAI_API_KEY) and OpenAI is not None
+
+
+def _ai_text_sync(instructions, user_input, max_output_tokens=500):
+    if not ai_available():
+        raise RuntimeError("OPENAI_API_KEY yok veya openai paketi yuklu degil.")
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    response = client.responses.create(
+        model=OPENAI_MODEL,
+        instructions=instructions,
+        input=user_input,
+        max_output_tokens=max_output_tokens,
+    )
+    return (response.output_text or "").strip()
+
+
+async def ai_text(instructions, user_input, max_output_tokens=500):
+    return await asyncio.to_thread(_ai_text_sync, instructions, user_input, max_output_tokens)
+
+
+def extract_json_object(raw):
+    if not raw:
+        return None
+    raw = raw.strip()
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(raw[start:end + 1])
+    except Exception:
+        return None
+
+
+def ai_missing_text():
+    return (
+        "Yapay zeka aktif degil. Railway > Variables kismina OPENAI_API_KEY ekle ve "
+        "requirements.txt icine openai satirini koy."
+    )
+
+
+async def ai_generate_ad_from_prompt(prompt_text):
+    instructions = (
+        "Sen Telegram reklam metni yazan kisa ve net bir asistansin. "
+        "Yasal, guvenli, yaniltici olmayan, abartisiz reklam yaz. "
+        "Yetiskin veya hassas icerik varsa acik/uygunsuz detay yazma; notr dil kullan. "
+        "Cevabi sadece JSON olarak ver: {\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"}. "
+        "title en fazla 60 karakter, text en fazla 400 karakter olsun."
+    )
+    raw = await ai_text(instructions, prompt_text, max_output_tokens=450)
+    data = extract_json_object(raw) or {}
+    title = str(data.get("title") or "").strip()
+    body = str(data.get("text") or data.get("body") or "").strip()
+    link = str(data.get("link") or "").strip()
+    return title, body, link, raw
+
+
+async def ai_check_ad_content(title, body, link):
+    instructions = (
+        "Sen Telegram reklam moderatorusun. Reklami kisa kontrol et. "
+        "Dolandiricilik, yasa disi icerik, resit olmayanlar, izinsiz icerik, bahis/kumar, zararli link, spam, "
+        "asiri iddia ve yaniltici vaat risklerini belirt. "
+        "Sonucu Turkce ve kisa ver. Ilk satir mutlaka su uc ifadeden biri olsun: VERDICT: OK, VERDICT: RISK, VERDICT: REJECT."
+    )
+    user_input = f"Baslik: {title}\nMetin: {body}\nLink: {link}"
+    return await ai_text(instructions, user_input, max_output_tokens=350)
+
+
+async def ai_support_reply(question, user_id):
+    try:
+        active_subs = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
+        balance_row = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data or []
+        balance = safe_int(balance_row[0].get("balance"), 0) if balance_row else 0
+    except Exception:
+        active_subs = []
+        balance = 0
+    instructions = (
+        "Sen VIP Telegram botu icin destek asistanisin. Kisa, net ve sakin cevap ver. "
+        "Odeme, iade veya hesapla ilgili kesin karar verme; gerekirse admin destege yonlendir. "
+        "Kullaniciya buton yollarini anlat: Uyeligim, Bakiye, Reklamlarim, Destek. "
+        "Cevap en fazla 6 satir olsun."
+    )
+    user_input = (
+        f"Kullanici sorusu: {question}\n"
+        f"Aktif uyelik sayisi: {len(active_subs)}\n"
+        f"Reklam bakiyesi: {balance} Stars"
+    )
+    return await ai_text(instructions, user_input, max_output_tokens=300)
+
 
 
 async def ensure_defaults_once(context: ContextTypes.DEFAULT_TYPE = None):
@@ -1136,6 +1235,61 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             await update.message.reply_text(" Reklam paketi eklendi.")
 
+        elif mode == "ad_ai_prompt":
+            if not ai_available():
+                context.user_data.clear()
+                await update.message.reply_text(ai_missing_text())
+                return
+            await update.message.reply_text("Yapay zeka reklam metnini hazirliyor...")
+            try:
+                title, body, link, raw_ai = await ai_generate_ad_from_prompt(raw_text)
+                ok, msg, clean_link = validate_ad_fields(title, body, link)
+                if not ok:
+                    context.user_data["mode"] = "ad_ai_prompt"
+                    await update.message.reply_text(
+                        "AI metni olusturdu ama link/baslik/metin eksik gorunuyor. Tekrar yaz:\n\n"
+                        "Ornek: Yeni kanal icin reklam, konu: teknoloji, link: https://t.me/kanal"
+                    )
+                    return
+                context.user_data["ai_ad_title"] = title
+                context.user_data["ai_ad_text"] = body
+                context.user_data["ai_ad_link"] = clean_link
+                kb = [
+                    [InlineKeyboardButton("AI Metnini Kullan", callback_data="ad_ai_use")],
+                    [InlineKeyboardButton("Yeniden Yazdir", callback_data="ad_ai_retry"), InlineKeyboardButton("Iptal", callback_data="ad_cancel")],
+                ]
+                await update.message.reply_text(
+                    f"â¨ AI reklam onerisi\n\n"
+                    f"Baslik: {title}\n\n"
+                    f"Metin:\n{body}\n\n"
+                    f"Link: {clean_link}",
+                    reply_markup=InlineKeyboardMarkup(kb),
+                )
+            except Exception as e:
+                logger.error("AI reklam hatasi: %s", e)
+                context.user_data.clear()
+                await update.message.reply_text("AI reklam olusturulamadi. API anahtarini ve Railway loglarini kontrol et.")
+
+        elif mode == "ai_support_question":
+            if not ai_available():
+                context.user_data.clear()
+                await update.message.reply_text(ai_missing_text())
+                return
+            await update.message.reply_text("Yapay zeka cevabi hazirlaniyor...")
+            try:
+                answer = await ai_support_reply(raw_text, user_id)
+                context.user_data.clear()
+                kb = [[InlineKeyboardButton("Admin ile Konus", callback_data="support_auto_admin")]]
+                await update.message.reply_text(
+                    f"ð¤ AI Destek Cevabi\n\n{answer}\n\n"
+                    "Sorun cozulmediyse Admin ile Konus butonuna bas.",
+                    reply_markup=InlineKeyboardMarkup(kb),
+                )
+            except Exception as e:
+                logger.error("AI destek hatasi: %s", e)
+                context.user_data.clear()
+                await update.message.reply_text("AI destek cevabi alinamadi. Lutfen Destek butonundan admin'e yaz.")
+
         elif mode == "ad_single_message":
             parts = [p.strip() for p in raw_text.split("|")]
             if len(parts) < 3:
@@ -1382,6 +1536,50 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.reply_text("Yetkin yok.")
         return
+    if data == "support_ai":
+        context.user_data["mode"] = "ai_support_question"
+        await query.message.reply_text(
+            "Sorununu tek mesaj olarak yaz. AI once kisa cozum onerecek. Cozulmezse admin'e yonlendirir."
+        )
+        return
+    if data == "ad_method_ai":
+        if not context.user_data.get("ad_channel_id"):
+            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
+            return
+        if not ai_available():
+            await query.message.reply_text(ai_missing_text())
+            return
+        context.user_data["mode"] = "ad_ai_prompt"
+        await query.message.reply_text(
+            "AI ile reklam yazdirmak icin reklamini kisaca anlat ve linki ekle.\n\n"
+            "Ornek:\n"
+            "Yeni VIP kanal reklami. Hizli katilim, Stars ile odeme. Link: https://t.me/kanal"
+        )
+        return
+    if data == "ad_ai_retry":
+        if not context.user_data.get("ad_channel_id"):
+            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
+            return
+        context.user_data["mode"] = "ad_ai_prompt"
+        await query.message.reply_text("Reklami tekrar kisaca anlat ve linki ekle:")
+        return
+    if data == "ad_ai_use":
+        title = context.user_data.get("ai_ad_title")
+        body = context.user_data.get("ai_ad_text")
+        link = context.user_data.get("ai_ad_link")
+        ok, msg, clean_link = validate_ad_fields(title or "", body or "", link or "")
+        if not ok:
+            await query.message.reply_text("AI metni eksik gorunuyor. Yeniden yazdir.")
+            return
+        context.user_data["ad_title"] = title
+        context.user_data["ad_text"] = body
+        context.user_data["ad_link"] = clean_link
+        context.user_data["mode"] = "ad_image"
+        await query.message.reply_text(
+            "AI metni secildi. Gorsel eklemek istersen foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
+        )
+        return
     if data == "ad_method_single":
         if not context.user_data.get("ad_channel_id"):
             await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
@@ -1426,6 +1624,13 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(" Yetkin yok.")
         return
 
+    if data.startswith("ad_ai_check_"):
+        if not can_manage(user_id):
+            await query.message.reply_text(" Yetkin yok.")
+            return
+        order_id = int(data.split("_")[3])
+        await ai_check_ad_order_message(query.message, order_id)
+        return
     if data.startswith("cancel_"):
         await handle_cancel_admin(query, context)
         return
@@ -2241,6 +2446,7 @@ async def run_giveaway(message, context, week_key, manual=False):
 
 async def support_menu(message):
     kb = [
+        [InlineKeyboardButton("ð¤ AI Destek Cevabi", callback_data="support_ai")],
         [InlineKeyboardButton(" Link calismiyor", callback_data="support_auto_link")],
         [InlineKeyboardButton(" Odeme yaptim", callback_data="support_auto_payment")],
         [InlineKeyboardButton(" Uyelik tarihi", callback_data="support_auto_date")],
@@ -2834,6 +3040,7 @@ async def start_ad_order_channel(query, context):
     context.user_data["ad_channel_name"] = ch.get("name") or f"Kanal ID {channel_id}"
 
     kb = [
+        [InlineKeyboardButton("ð¤ AI ile Reklam Yazdir", callback_data="ad_method_ai")],
         [InlineKeyboardButton("\u26a1 Tek Mesajla Reklam", callback_data="ad_method_single")],
         [InlineKeyboardButton("\u2728 Haz\u0131r Reklam Olu\u015ftur", callback_data="ad_method_template")],
         [InlineKeyboardButton("\u270d\ufe0f Ad\u0131m Ad\u0131m Olu\u015ftur", callback_data="ad_method_step")],
@@ -3021,6 +3228,24 @@ async def my_ad_orders(message, user_id):
 
         await message.reply_text(msg[:3900])
 
+async def ai_check_ad_order_message(message, order_id):
+    if not ai_available():
+        await message.reply_text(ai_missing_text())
+        return
+    row = supabase.table("ad_orders").select("*").eq("id", int(order_id)).execute().data
+    if not row:
+        await message.reply_text("Reklam talebi bulunamadi.")
+        return
+    order = row[0]
+    await message.reply_text("AI reklam kontrolu yapiliyor...")
+    try:
+        result = await ai_check_ad_content(order.get("title") or "", order.get("ad_text") or "", order.get("link") or "")
+        await message.reply_text(f"ð¤ AI Reklam Kontrolu #{order_id}\n\n{result}\n\nSon karar yine adminde. Gerekirse Onayla veya Reddet butonlarini kullan.")
+    except Exception as e:
+        logger.error("AI reklam kontrol hatasi: %s", e)
+        await message.reply_text("AI kontrol yapilamadi. OPENAI_API_KEY, model ve Railway loglarini kontrol et.")
+
+
 async def ad_orders_admin_message(message):
     rows = supabase.table("ad_orders").select("*").eq("status", "pending").order("id", desc=True).limit(20).execute().data or []
     if not rows:
@@ -3045,7 +3270,7 @@ async def ad_orders_admin_message(message):
                 InlineKeyboardButton("Eksik Bilgi", callback_data=f"ad_reject_reason_missing_{o['id']}"),
                 InlineKeyboardButton("Kurallara Aykiri", callback_data=f"ad_reject_reason_rules_{o['id']}"),
             ],
-            [InlineKeyboardButton("Goruntulenme Gir", callback_data=f"ad_views_{o['id']}")],
+            [InlineKeyboardButton("ð¤ AI Kontrol", callback_data=f"ad_ai_check_{o['id']}"), InlineKeyboardButton("Goruntulenme Gir", callback_data=f"ad_views_{o['id']}")],
         ]
 
         image_line = "Var" if o.get("image_file_id") else "Yok"
