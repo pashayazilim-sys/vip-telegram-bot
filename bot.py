@@ -1449,16 +1449,56 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # REFERRALS / GIVEAWAY
 # =========================================================
 
-async def add_referral_points(referrer_id, referred_id, points, event_type):
-    week = current_week_key()
-    try:
-        supabase.table("referral_events").insert({"referrer_id": referrer_id, "referred_id": referred_id, "points": points, "event_type": event_type, "week_key": week}).execute()
-        row = await get_user_row(referrer_id)
-        if row:
-            supabase.table("users").update({"referral_points": int(row.get("referral_points") or 0) + points, "referral_total_points": int(row.get("referral_total_points") or 0) + points}).eq("user_id", referrer_id).execute()
-    except Exception as e:
-        logger.warning("Referans puan eklenemedi: %s", e)
 
+async def add_referral_points(referrer_id, referred_id, points, event_type):
+    """Add referral points safely even if an older SQL schema is installed."""
+    week = current_week_key()
+    pts = int(points or 0)
+    if not referrer_id or pts <= 0:
+        return
+
+    try:
+        supabase.table("referral_events").insert({
+            "referrer_id": int(referrer_id),
+            "referred_id": int(referred_id) if referred_id else None,
+            "points": pts,
+            "event_type": event_type,
+            "week_key": week,
+        }).execute()
+    except Exception as e:
+        logger.warning("referral_events week_key insert failed, fallback: %s", e)
+        try:
+            supabase.table("referral_events").insert({
+                "referrer_id": int(referrer_id),
+                "referred_id": int(referred_id) if referred_id else None,
+                "points": pts,
+                "event_type": event_type,
+            }).execute()
+        except Exception as e2:
+            logger.warning("referral_events insert failed: %s", e2)
+
+    row = await get_user_row(referrer_id)
+    if not row:
+        return
+
+    current_points = int(row.get("referral_points") or 0)
+    current_total = int(row.get("referral_total_points") or row.get("referral_entries") or current_points or 0)
+    current_entries = int(row.get("referral_entries") or 0)
+
+    payload = {"referral_points": current_points + pts}
+    if "referral_total_points" in row:
+        payload["referral_total_points"] = current_total + pts
+    if "referral_entries" in row:
+        payload["referral_entries"] = current_entries + pts
+
+    try:
+        supabase.table("users").update(payload).eq("user_id", int(referrer_id)).execute()
+    except Exception as e:
+        logger.warning("referral user update failed, minimal fallback: %s", e)
+        try:
+            supabase.table("users").update({"referral_points": current_points + pts}).eq("user_id", int(referrer_id)).execute()
+        except Exception as e2:
+            logger.warning("minimal referral update failed: %s", e2)
 
 async def handle_referral_purchase_bonus(context, buyer_id):
     row = await get_user_row(buyer_id)
@@ -1494,58 +1534,146 @@ async def extend_first_active_or_default_subscription(context, user_id, days):
     return ch["id"]
 
 
+
 async def referral_user_message(message, context, user_id):
-    me = await context.bot.get_me()
-    row = await get_user_row(user_id)
-    points = int(row.get("referral_points") or 0) if row else 0
-    total = int(row.get("referral_total_points") or 0) if row else 0
-    link = f"https://t.me/{me.username}?start=ref_{user_id}"
-    kb = [
-        [InlineKeyboardButton(" 3 puan = 1 gun", callback_data="redeem_3_1")],
-        [InlineKeyboardButton(" 10 puan = 7 gun", callback_data="redeem_10_7")],
-        [InlineKeyboardButton(" 25 puan = 30 gun", callback_data="redeem_25_30")],
-    ]
-    await message.reply_text(f" Davet Et Kazan\n\nSenin linkin:\n{link}\n\nMevcut puan: {points}\nToplam puan: {total}\n\n1 yeni kullanici = +{get_referral_invite_points()} puan\nIlk satin alma = +{get_referral_purchase_points()} puan + bonus gun", reply_markup=InlineKeyboardMarkup(kb))
+    try:
+        me = await context.bot.get_me()
+        row = await get_user_row(user_id) or {}
+        points = int(row.get("referral_points") or 0)
+        total = int(row.get("referral_total_points") or row.get("referral_entries") or points or 0)
+        link = f"https://t.me/{me.username}?start=ref_{user_id}"
+        kb = [
+            [InlineKeyboardButton("\U0001f381 3 puan = 1 g\u00fcn", callback_data="redeem_3_1")],
+            [InlineKeyboardButton("\U0001f525 10 puan = 7 g\u00fcn", callback_data="redeem_10_7")],
+            [InlineKeyboardButton("\U0001f451 25 puan = 30 g\u00fcn", callback_data="redeem_25_30")],
+        ]
+        await message.reply_text(
+            "\U0001f381 Davet Et Kazan\n\n"
+            f"Senin linkin:\n{link}\n\n"
+            f"Mevcut puan: {points}\n"
+            f"Toplam puan: {total}\n\n"
+            f"1 yeni kullan\u0131c\u0131 = +{get_referral_invite_points()} puan\n"
+            f"\u0130lk sat\u0131n alma = +{get_referral_purchase_points()} puan + bonus g\u00fcn",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+    except Exception as e:
+        logger.error("referral_user_message error: %s", e)
+        await message.reply_text("\u274c Referans bilgisi al\u0131namad\u0131. SQL patch \u00e7al\u0131\u015ft\u0131r\u0131ld\u0131 m\u0131 kontrol et.")
 
 
 async def redeem_referral_reward(query, context):
-    _, cost, days = query.data.split("_")
-    cost, days = int(cost), int(days)
-    row = await get_user_row(query.from_user.id)
-    points = int(row.get("referral_points") or 0) if row else 0
-    if points < cost:
-        await query.message.reply_text(f" Yetersiz puan. Gerekli: {cost}, mevcut: {points}"); return
-    supabase.table("users").update({"referral_points": points - cost}).eq("user_id", query.from_user.id).execute()
-    await extend_first_active_or_default_subscription(context, query.from_user.id, days)
-    await log_event("referral_reward_redeemed", query.from_user.id, query.from_user.id, details=f"{cost} puan -> {days} gun")
-    await query.message.reply_text(f" {cost} puan harcandi, {days} gun VIP odul uygulandi.")
+    try:
+        _, cost, days = query.data.split("_")
+        cost, days = int(cost), int(days)
+        row = await get_user_row(query.from_user.id) or {}
+        points = int(row.get("referral_points") or 0)
+        if points < cost:
+            await query.message.reply_text(f"\u274c Yetersiz puan. Gerekli: {cost}, mevcut: {points}")
+            return
+
+        ch = await get_first_active_channel()
+        active = supabase.table("subscriptions").select("*").eq("user_id", query.from_user.id).eq("status", "active").limit(1).execute().data or []
+        if not ch and not active:
+            await query.message.reply_text("\u274c \u00d6d\u00fcl verilecek aktif kanal yok. \u00d6nce admin panelden en az bir VIP kanal ekle.")
+            return
+
+        supabase.table("users").update({"referral_points": points - cost}).eq("user_id", query.from_user.id).execute()
+        await extend_first_active_or_default_subscription(context, query.from_user.id, days)
+        await log_event("referral_reward_redeemed", query.from_user.id, query.from_user.id, details=f"{cost} puan -> {days} gun")
+        await query.message.reply_text(f"\u2705 {cost} puan harcand\u0131, {days} g\u00fcn VIP \u00f6d\u00fcl uyguland\u0131.")
+    except Exception as e:
+        logger.error("redeem_referral_reward error: %s", e)
+        await query.message.reply_text("\u274c \u00d6d\u00fcl kullan\u0131lamad\u0131. SQL patch ve aktif kanal kontrol\u00fc yap.")
 
 
 async def leaderboard_message(message):
-    rows = supabase.table("users").select("*").order("referral_total_points", desc=True).limit(10).execute().data or []
-    if not rows:
-        await message.reply_text(" Henuz liderlik verisi yok."); return
-    text = "Liderlik Tablosu\n\n"
-    for i, u in enumerate(rows, start=1):
-        text += f"{i}. @{u.get('username') or u.get('user_id')} - {u.get('referral_total_points') or 0} puan\n"
+    try:
+        rows = supabase.table("users").select("*").execute().data or []
+    except Exception as e:
+        logger.error("leaderboard users query failed: %s", e)
+        await message.reply_text("\u274c Liderlik verisi okunamad\u0131. SQL patch'i \u00e7al\u0131\u015ft\u0131rman gerekiyor.")
+        return
+
+    scored = []
+    for u in rows:
+        score = int(u.get("referral_total_points") or u.get("referral_entries") or u.get("referral_points") or 0)
+        if score > 0:
+            scored.append((score, u))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    if not scored:
+        await message.reply_text(
+            "\U0001f3c6 Liderlik Tablosu\n\n"
+            "Hen\u00fcz puanl\u0131 kullan\u0131c\u0131 yok.\n\n"
+            "Kullan\u0131c\u0131lar Referans butonundan link payla\u015f\u0131nca burada g\u00f6r\u00fcnecek."
+        )
+        return
+
+    text = "\U0001f3c6 Liderlik Tablosu\n\n"
+    for i, (score, u) in enumerate(scored[:10], start=1):
+        name = f"@{u.get('username')}" if u.get("username") else str(u.get("user_id"))
+        text += f"{i}. {name} - {score} puan\n"
+
     await message.reply_text(text)
 
 
 async def referrals_admin_message(message):
-    events = supabase.table("referral_events").select("*").execute().data or []
+    try:
+        events = supabase.table("referral_events").select("*").execute().data or []
+    except Exception as e:
+        logger.error("referrals_admin_message error: %s", e)
+        await message.reply_text("\u274c Referans olaylar\u0131 okunamad\u0131. SQL patch \u00e7al\u0131\u015ft\u0131r.")
+        return
+
     joins = len([e for e in events if e.get("event_type") == "join"])
     purchases = len([e for e in events if e.get("event_type") == "purchase"])
-    await message.reply_text(f"Referans Paneli\n\nToplam referans kayit: {joins}\nSatin almaya donen: {purchases}\nToplam puan olayi: {len(events)}")
+    total_points = sum(int(e.get("points") or e.get("entries") or 0) for e in events)
+
+    await message.reply_text(
+        "\U0001f381 Referans Paneli\n\n"
+        f"Toplam referans kay\u0131t: {joins}\n"
+        f"Sat\u0131n almaya d\u00f6nen: {purchases}\n"
+        f"Toplam \u00e7ekili\u015f hakk\u0131/puan: {total_points}"
+    )
     await leaderboard_message(message)
+
+
+def referral_event_points(row):
+    return int(row.get("points") or row.get("entries") or 0)
+
+
+def filter_events_for_week(rows, week):
+    with_week = [r for r in rows if r.get("week_key")]
+    if with_week:
+        return [r for r in with_week if r.get("week_key") == week]
+    return rows
+
+
+async def get_referral_events_safe(week=None):
+    try:
+        rows = supabase.table("referral_events").select("*").execute().data or []
+    except Exception as e:
+        logger.error("referral_events query failed: %s", e)
+        return []
+    if week:
+        return filter_events_for_week(rows, week)
+    return rows
 
 
 async def giveaway_user_message(message):
     week = current_week_key()
-    rows = supabase.table("referral_events").select("*").eq("week_key", week).execute().data or []
-    total_points = sum(int(r.get("points") or 0) for r in rows)
-    participants = len(set(r.get("referrer_id") for r in rows if r.get("referrer_id")))
-    await message.reply_text(f" Haftalik Cekilis\n\nBu hafta katilimci: {participants}\nToplam cekilis hakki: {total_points}\n\nHer referans puani cekilis hakkidir. Haftanin kazanani {get_weekly_winner_prize_days()} gun VIP alir.")
+    rows = await get_referral_events_safe(week)
+    total_points = sum(referral_event_points(r) for r in rows)
+    participants = len(set(r.get("referrer_id") for r in rows if r.get("referrer_id") and referral_event_points(r) > 0))
 
+    await message.reply_text(
+        "\U0001f389 Haftal\u0131k \u00c7ekili\u015f\n\n"
+        f"Bu hafta kat\u0131l\u0131mc\u0131: {participants}\n"
+        f"Toplam \u00e7ekili\u015f hakk\u0131: {total_points}\n\n"
+        "Her referans puan\u0131 \u00e7ekili\u015f hakk\u0131d\u0131r.\n"
+        f"Haftan\u0131n kazanan\u0131 {get_weekly_winner_prize_days()} g\u00fcn VIP al\u0131r."
+    )
 
 async def giveaway_admin_message(message):
     await giveaway_user_message(message)
@@ -1553,31 +1681,50 @@ async def giveaway_admin_message(message):
     await message.reply_text("Admin cekilis paneli", reply_markup=InlineKeyboardMarkup(kb))
 
 
+
 async def run_giveaway(message, context, week_key, manual=False):
-    rows = supabase.table("referral_events").select("*").eq("week_key", week_key).execute().data or []
+    rows = await get_referral_events_safe(week_key)
     tickets = []
+
     for r in rows:
         rid = r.get("referrer_id")
-        pts = int(r.get("points") or 0)
-        if rid:
-            tickets.extend([int(rid)] * max(0, pts))
+        pts = referral_event_points(r)
+        if rid and pts > 0:
+            tickets.extend([int(rid)] * pts)
+
     if not tickets:
-        await message.reply_text(" Bu hafta cekilis hakki yok.")
+        await message.reply_text(
+            "\u274c Bu hafta \u00e7ekili\u015f hakk\u0131 yok.\n\n"
+            "Bir kullan\u0131c\u0131 Referans linkiyle arkada\u015f getirince \u00e7ekili\u015f hakk\u0131 olu\u015fur."
+        )
         return
+
     winner = random.choice(tickets)
     days = get_weekly_winner_prize_days()
     cid = await extend_first_active_or_default_subscription(context, winner, days)
-    supabase.table("giveaway_winners").insert({"week_key": week_key, "user_id": winner, "prize_days": days, "channel_id": cid}).execute()
-    await log_event("giveaway_winner", None, winner, cid, f"week={week_key}, days={days}")
+
+    stored = False
+    for table_name in ["giveaway_winners", "raffle_winners"]:
+        try:
+            payload = {"week_key": week_key, "user_id": winner, "channel_id": cid}
+            if table_name == "giveaway_winners":
+                payload["prize_days"] = days
+            else:
+                payload["reward_days"] = days
+            supabase.table(table_name).insert(payload).execute()
+            stored = True
+            break
+        except Exception as e:
+            logger.warning("winner insert failed for %s: %s", table_name, e)
+
+    await log_event("giveaway_winner", None, winner, cid, f"week={week_key}, days={days}, stored={stored}")
+
     try:
-        await context.bot.send_message(winner, f" Haftalik cekilisi kazandin! {days} gun VIP odul uygulandi.")
+        await context.bot.send_message(winner, f"\U0001f389 Haftal\u0131k \u00e7ekili\u015fi kazand\u0131n! {days} g\u00fcn VIP \u00f6d\u00fcl uyguland\u0131.")
     except Exception:
         pass
-    await message.reply_text(f" Kazanan: {winner}\nOdul: {days} gun VIP")
 
-# =========================================================
-# USER SUPPORT / FAQ / CANCEL
-# =========================================================
+    await message.reply_text(f"\U0001f389 Kazanan: {winner}\n\U0001f381 \u00d6d\u00fcl: {days} g\u00fcn VIP")
 
 async def support_menu(message):
     kb = [
@@ -2025,19 +2172,30 @@ async def daily_report_job(context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+
 async def weekly_giveaway_job(context: ContextTypes.DEFAULT_TYPE):
     if now_utc().weekday() != 0:  # Monday
         return
     week = previous_week_key()
-    already = supabase.table("giveaway_winners").select("*").eq("week_key", week).execute().data or []
+
+    already = []
+    for table_name in ["giveaway_winners", "raffle_winners"]:
+        try:
+            already = supabase.table(table_name).select("*").eq("week_key", week).execute().data or []
+            if already:
+                break
+        except Exception:
+            pass
     if already:
         return
+
     class DummyMsg:
         async def reply_text(self, text, **kwargs):
             try:
                 await context.bot.send_message(OWNER_ID, text)
             except Exception:
                 pass
+
     await run_giveaway(DummyMsg(), context, week, manual=False)
 
 # =========================================================
