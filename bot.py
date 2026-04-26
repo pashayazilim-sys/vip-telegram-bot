@@ -58,6 +58,10 @@ MAIN_MENU = ReplyKeyboardMarkup(
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
         ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
         ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
+        ["\U0001f4b0 Bakiyem", "\u2b50 Bakiye Y\u00fckle"],
+        ["\U0001f4e3 Reklam Ver", "\U0001f4c4 Reklamlar\u0131m"],
+        ["\U0001f4b0 Bakiyem", "\u2b50 Bakiye Y\u00fckle"],
+        ["\U0001f4e3 Reklam Ver", "\U0001f4c4 Reklamlar\u0131m"],
         ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
@@ -93,6 +97,12 @@ LABEL_TO_KEY = {
     "\U0001f389 Cekilis": "Cekilis",
     "\U0001f39f\ufe0f Kupon Gir": "Kupon Gir",
     "\U0001f39f Kupon Gir": "Kupon Gir",
+    "\U0001f4b0 Bakiyem": "Bakiyem",
+    "\u2b50 Bakiye Y\u00fckle": "Bakiye Yukle",
+    "\u2b50 Bakiye Yukle": "Bakiye Yukle",
+    "\U0001f4e3 Reklam Ver": "Reklam Ver",
+    "\U0001f4c4 Reklamlar\u0131m": "Reklamlarim",
+    "\U0001f4c4 Reklamlarim": "Reklamlarim",
     "\u2753 SSS": "SSS",
     "\U0001f198 Destek": "Destek",
     "\u2139\ufe0f Yard\u0131m": "Yardim",
@@ -113,6 +123,12 @@ LABEL_TO_KEY = {
     "Cekilis": "Cekilis",
     "\u00c7ekili\u015f": "Cekilis",
     "Kupon Gir": "Kupon Gir",
+    "Bakiyem": "Bakiyem",
+    "Bakiye Yukle": "Bakiye Yukle",
+    "Bakiye Y\u00fckle": "Bakiye Yukle",
+    "Reklam Ver": "Reklam Ver",
+    "Reklamlarim": "Reklamlarim",
+    "Reklamlar\u0131m": "Reklamlarim",
     "SSS": "SSS",
     "Destek": "Destek",
     "Yardim": "Yardim",
@@ -591,6 +607,14 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "Kupon Gir":
         context.user_data["mode"] = "user_coupon"
         await update.message.reply_text("\U0001f39f\ufe0f Kupon kodunu yaz:")
+    elif text == "Bakiyem":
+        await show_ad_balance(update.message, user_id)
+    elif text == "Bakiye Yukle":
+        await show_topup_options(update.message)
+    elif text == "Reklam Ver":
+        await show_ad_packages_user(update.message, user_id)
+    elif text == "Reklamlarim":
+        await my_ad_orders(update.message, user_id)
     elif text == "Destek":
         await support_menu(update.message)
     elif text == "SSS":
@@ -610,6 +634,8 @@ async def help_message(message):
         "\U0001f381 Referans: Arkada\u015f getirip puan kazan\u0131rs\u0131n.\n"
         "\U0001f3c6 Liderlik: En \u00e7ok davet yapanlar\u0131 g\u00f6sterir.\n"
         "\u2753 SSS: Grup/kanal ve \u00f6deme sorunlar\u0131 i\u00e7in haz\u0131r cevaplar.\n"
+        "\U0001f4b0 Bakiyem: Reklam bakiyeni g\u00f6sterir.\n"
+        "\U0001f4e3 Reklam Ver: Reklam talebi olu\u015fturur.\n"
         "\U0001f198 Destek: Admin'e destek talebi g\u00f6nderir."
     )
 
@@ -625,6 +651,10 @@ async def admin_dashboard_text():
     supports = supabase.table("support_requests").select("*").eq("status", "open").execute().data or []
     abandoned = supabase.table("checkout_intents").select("*").eq("status", "started").execute().data or []
     blacklisted = supabase.table("blacklist").select("*").eq("active", True).execute().data or []
+    try:
+        pending_ads = supabase.table("ad_orders").select("*").eq("status", "pending").execute().data or []
+    except Exception:
+        pending_ads = []
     today_count = today_stars = month_count = month_stars = 0
     for s in sales:
         if s.get("refund_status") == "refunded":
@@ -650,6 +680,7 @@ async def admin_dashboard_text():
         f"\U0001f6d2 Yar\u0131m kalan \u00f6deme: {len(abandoned)}\n"
         f"\u23f3 Bug\u00fcn bitecek \u00fcyelik: {expiring_today}\n"
         f"\U0001f198 A\u00e7\u0131k destek: {len(supports)}\n"
+        f"\U0001f4e3 Bekleyen reklam: {len(pending_ads)}\n"
         f"\U0001f6ab Kara liste: {len(blacklisted)}\n"
         f"\U0001f527 Bak\u0131m modu: {'A\u00c7IK' if maintenance_on() else 'KAPALI'}"
     )
@@ -665,6 +696,8 @@ async def open_admin_panel(message):
         [InlineKeyboardButton("\U0001f465 Kullan\u0131c\u0131lar", callback_data="admin_users"), InlineKeyboardButton("\U0001f50d Kullan\u0131c\u0131 Ara", callback_data="admin_search_user")],
         [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
         [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals"), InlineKeyboardButton("\U0001f389 \u00c7ekili\u015f Paneli", callback_data="admin_giveaway")],
+        [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4e6 Reklam Paketleri", callback_data="admin_ad_packages")],
+        [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances"), InlineKeyboardButton("\u2795 Reklam Paketi Ekle", callback_data="admin_add_ad_package")],
         [InlineKeyboardButton("\u2753 SSS Y\u00f6net", callback_data="admin_faq"), InlineKeyboardButton("\U0001f198 Destek Talepleri", callback_data="admin_support")],
         [InlineKeyboardButton("\u274c \u0130ptal Talepleri", callback_data="admin_cancel"), InlineKeyboardButton("\U0001f6ab Kara Liste", callback_data="admin_blacklist")],
         [InlineKeyboardButton("\U0001f46e Adminler", callback_data="admin_admins"), InlineKeyboardButton("\U0001f4dc \u0130\u015flem Loglar\u0131", callback_data="admin_logs")],
@@ -906,6 +939,53 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await search_user(update.message, text)
             context.user_data.clear()
 
+        elif mode == "add_ad_package":
+            if not can_manage(user_id):
+                context.user_data.clear()
+                await update.message.reply_text(" Yetkin yok.")
+                return
+            parts = [p.strip() for p in text.split("|")]
+            if len(parts) < 5:
+                await update.message.reply_text(" Format: PaketAdi | Fiyat | Hedef | KanalID/0 | Aciklama\nHedef: single veya all")
+                return
+            target_type = parts[2].lower()
+            if target_type not in ["single", "all"]:
+                await update.message.reply_text(" Hedef sadece single veya all olabilir.")
+                return
+            channel_id = None if parts[3] == "0" or target_type == "all" else int(parts[3])
+            supabase.table("ad_packages").insert({"name": parts[0], "price": int(parts[1]), "target_type": target_type, "channel_id": channel_id, "description": parts[4], "active": True}).execute()
+            await log_event("ad_package_added", user_id, details=text)
+            context.user_data.clear()
+            await update.message.reply_text(" Reklam paketi eklendi.")
+
+        elif mode == "ad_title":
+            if len(raw_text) > 80:
+                await update.message.reply_text(" Baslik cok uzun. En fazla 80 karakter yaz.")
+                return
+            context.user_data["ad_title"] = raw_text
+            context.user_data["mode"] = "ad_text"
+            await update.message.reply_text(" Reklam metnini yaz. En fazla 700 karakter.")
+
+        elif mode == "ad_text":
+            if len(raw_text) > 700:
+                await update.message.reply_text(" Metin cok uzun. En fazla 700 karakter yaz.")
+                return
+            context.user_data["ad_text"] = raw_text
+            context.user_data["mode"] = "ad_link"
+            await update.message.reply_text(" Hedef linki yaz. Ornek: https://t.me/kanal veya https://site.com")
+
+        elif mode == "ad_link":
+            link = raw_text.strip()
+            if not (link.startswith("https://") or link.startswith("http://") or link.startswith("t.me/") or link.startswith("@")):
+                await update.message.reply_text(" Link gecersiz. https:// veya t.me/ ile baslayan bir link yaz.")
+                return
+            if link.startswith("@"):
+                link = "https://t.me/" + link[1:]
+            elif link.startswith("t.me/"):
+                link = "https://" + link
+            context.user_data["ad_link"] = link
+            await preview_ad_order(update.message, context)
+
         elif mode == "user_coupon":
             code = text.upper()
             coupon = await get_coupon(code)
@@ -980,6 +1060,19 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data.startswith("support_auto_"):
         await support_auto_answer(query.message, data.split("_", 2)[2])
+        return
+    if data.startswith("topup_"):
+        await handle_topup(query, context)
+        return
+    if data.startswith("adpkg_"):
+        await start_ad_order(query, context)
+        return
+    if data == "ad_submit":
+        await submit_ad_order(query, context)
+        return
+    if data == "ad_cancel":
+        context.user_data.clear()
+        await query.message.reply_text(" Reklam talebi iptal edildi.")
         return
 
     # protected callbacks
@@ -1066,6 +1159,23 @@ async def admin_callback(query, context, data):
         await referrals_admin_message(query.message)
     elif data == "admin_giveaway":
         await giveaway_admin_message(query.message)
+    elif data == "admin_ads":
+        await ad_orders_admin_message(query.message)
+    elif data == "admin_ad_packages":
+        await ad_packages_admin_message(query.message)
+    elif data == "admin_add_ad_package":
+        if not can_manage(user_id):
+            await query.message.reply_text(" Yetkin yok."); return
+        context.user_data["mode"] = "add_ad_package"
+        await query.message.reply_text(" Reklam paketi ekle:\n\nPaketAdi | Fiyat | Hedef | KanalID/0 | Aciklama\n\nOrnek:\nTek Kanal | 1000 | single | 1 | Tek VIP kanalda reklam\nTum Kanallar | 3000 | all | 0 | Tum aktif kanallarda reklam")
+    elif data == "admin_ad_balances":
+        await ad_balances_admin_message(query.message)
+    elif data.startswith("ad_approve_"):
+        await approve_and_publish_ad(query.message, context, int(data.split("_")[2]), user_id)
+    elif data.startswith("ad_reject_"):
+        await reject_and_refund_ad(query.message, int(data.split("_")[2]), user_id)
+    elif data.startswith("adpkg_toggle_"):
+        await toggle_ad_package(query.message, int(data.split("_")[2]), user_id)
     elif data == "giveaway_run":
         await run_giveaway(query.message, context, previous_week_key(), manual=True)
     elif data == "admin_faq":
@@ -1393,6 +1503,13 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = update.message.successful_payment.invoice_payload
     user = update.effective_user
+    if payload.startswith("topup_"):
+        amount = int(payload.split("_", 1)[1])
+        await change_ad_balance(user.id, amount, "topup", "Stars bakiye yukleme")
+        await log_event("ad_balance_topup", user.id, user.id, details=f"{amount} Stars")
+        await update.message.reply_text(f" Bakiye yuklendi: {amount} Stars\n\nGuncel bakiye: {await get_ad_balance(user.id)} Stars")
+        await context.bot.send_message(OWNER_ID, f" Yeni reklam bakiyesi yukleme\n\nKullanici: @{safe_username(user) or 'yok'}\nID: {user.id}\nTutar: {amount} Stars")
+        return
     parts = payload.split("_", 4)
     item_type, item_id, paid_price = parts[0], int(parts[1]), int(parts[2])
     coupon_code = parts[3] if len(parts) > 3 and parts[3] != "NONE" else None
@@ -2098,6 +2215,339 @@ async def broadcast_message(message, context, text):
             failed += 1
     await log_event("broadcast_sent", message.chat_id, details=f"sent={sent}, failed={failed}")
     await message.reply_text(f" Duyuru bitti. Gonderildi: {sent}, Hata: {failed}")
+
+# =========================================================
+# AD MARKETPLACE / BALANCE SYSTEM
+# =========================================================
+
+async def get_ad_balance(user_id):
+    try:
+        row = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data
+        if row:
+            return int(row[0].get("balance") or 0)
+        supabase.table("ad_balances").insert({"user_id": int(user_id), "balance": 0, "spent": 0}).execute()
+    except Exception as e:
+        logger.warning("ad balance read failed: %s", e)
+    return 0
+
+
+async def change_ad_balance(user_id, amount, tx_type, description, order_id=None):
+    user_id = int(user_id)
+    amount = int(amount)
+    current = await get_ad_balance(user_id)
+    new_balance = current + amount
+    if new_balance < 0:
+        return False
+    try:
+        row = supabase.table("ad_balances").select("*").eq("user_id", user_id).execute().data
+        if row:
+            spent = int(row[0].get("spent") or 0)
+            if amount < 0:
+                spent += abs(amount)
+            supabase.table("ad_balances").update({"balance": new_balance, "spent": spent, "updated_at": now_utc().isoformat()}).eq("user_id", user_id).execute()
+        else:
+            supabase.table("ad_balances").insert({"user_id": user_id, "balance": new_balance, "spent": abs(amount) if amount < 0 else 0}).execute()
+        supabase.table("ad_transactions").insert({"user_id": user_id, "amount": amount, "type": tx_type, "description": description, "order_id": order_id}).execute()
+        return True
+    except Exception as e:
+        logger.error("ad balance update failed: %s", e)
+        return False
+
+
+async def ensure_default_ad_packages():
+    try:
+        rows = supabase.table("ad_packages").select("*").execute().data or []
+        if rows:
+            return
+        supabase.table("ad_packages").insert([
+            {"name": "Tek Kanal Reklami", "price": safe_int(get_setting("ad_default_single_price", "1000"), 1000), "target_type": "single", "channel_id": None, "description": "Adminin sectigi tek aktif VIP kanalda reklam", "active": True},
+            {"name": "Tum Kanallar Reklami", "price": safe_int(get_setting("ad_default_all_price", "3000"), 3000), "target_type": "all", "channel_id": None, "description": "Tum aktif VIP kanallarda reklam", "active": True},
+        ]).execute()
+    except Exception as e:
+        logger.warning("default ad packages failed: %s", e)
+
+
+async def show_ad_balance(message, user_id):
+    balance = await get_ad_balance(user_id)
+    orders = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).execute().data or []
+    pending = len([o for o in orders if o.get("status") == "pending"])
+    published = len([o for o in orders if o.get("status") == "published"])
+    await message.reply_text(
+        f"\U0001f4b0 Reklam Bakiyen\n\n"
+        f"Bakiye: {balance} Stars\n"
+        f"Bekleyen reklam: {pending}\n"
+        f"Yayindaki/yayinlanan reklam: {published}\n\n"
+        f"Bakiye yuklemek icin: \u2b50 Bakiye Yukle"
+    )
+
+
+async def show_topup_options(message):
+    kb = [
+        [InlineKeyboardButton("1000 Stars", callback_data="topup_1000"), InlineKeyboardButton("2500 Stars", callback_data="topup_2500")],
+        [InlineKeyboardButton("5000 Stars", callback_data="topup_5000"), InlineKeyboardButton("10000 Stars", callback_data="topup_10000")],
+    ]
+    await message.reply_text("\u2b50 Reklam bakiyesi yukle\n\nYuklemek istedigin tutari sec:", reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def handle_topup(query, context):
+    amount = int(query.data.split("_")[1])
+    if amount not in [1000, 2500, 5000, 10000]:
+        await query.message.reply_text(" Gecersiz tutar.")
+        return
+    await context.bot.send_invoice(
+        chat_id=query.message.chat_id,
+        title="Reklam Bakiyesi",
+        description=f"{amount} Stars reklam bakiyesi yukleme",
+        payload=f"topup_{amount}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label="Reklam Bakiyesi", amount=amount)],
+    )
+
+
+async def show_ad_packages_user(message, user_id):
+    await ensure_default_ad_packages()
+    rows = supabase.table("ad_packages").select("*").eq("active", True).order("id").execute().data or []
+    if not rows:
+        await message.reply_text(" Su anda aktif reklam paketi yok.")
+        return
+    balance = await get_ad_balance(user_id)
+    await message.reply_text(f"\U0001f4e3 Reklam Ver\n\nBakiyen: {balance} Stars\nReklam paketini sec:")
+    for p in rows:
+        target = "Tum aktif VIP kanallar" if p.get("target_type") == "all" else "Tek VIP kanal"
+        await message.reply_text(
+            f"\U0001f4e6 {p.get('name')}\n"
+            f"Fiyat: {p.get('price')} Stars\n"
+            f"Hedef: {target}\n"
+            f"Aciklama: {p.get('description') or '-'}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Bu paketi sec", callback_data=f"adpkg_{p['id']}")]])
+        )
+
+
+async def start_ad_order(query, context):
+    package_id = int(query.data.split("_")[1])
+    p = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
+    if not p or not p.get("active"):
+        await query.message.reply_text(" Reklam paketi bulunamadi veya pasif.")
+        return
+    balance = await get_ad_balance(query.from_user.id)
+    price = int(p.get("price") or 0)
+    if balance < price:
+        await query.message.reply_text(f" Bakiyen yetersiz.\n\nGerekli: {price} Stars\nBakiyen: {balance} Stars\n\nOnce Bakiye Yukle butonundan bakiye yukle.")
+        return
+    context.user_data.clear()
+    context.user_data["mode"] = "ad_title"
+    context.user_data["ad_package_id"] = package_id
+    await query.message.reply_text(" Reklam basligini yaz. Ornek: Yeni VIP Kanal")
+
+
+async def preview_ad_order(message, context):
+    package_id = context.user_data.get("ad_package_id")
+    p = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
+    if not p:
+        context.user_data.clear()
+        await message.reply_text(" Reklam paketi bulunamadi. Islem iptal edildi.")
+        return
+    title = context.user_data.get("ad_title")
+    ad_text = context.user_data.get("ad_text")
+    link = context.user_data.get("ad_link")
+    price = int(p.get("price") or 0)
+    kb = [[InlineKeyboardButton("Onaya Gonder", callback_data="ad_submit"), InlineKeyboardButton("Iptal", callback_data="ad_cancel")]]
+    await message.reply_text(
+        f"\U0001f4e3 Reklam Onizleme\n\n"
+        f"Paket: {p.get('name')}\n"
+        f"Fiyat: {price} Stars\n\n"
+        f"Baslik: {title}\n\n"
+        f"Metin:\n{ad_text}\n\n"
+        f"Link: {link}\n\n"
+        f"Onaya gonderirsen bakiye hemen duser. Admin reddederse iade edilir.",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+    context.user_data["mode"] = "ad_preview"
+
+
+async def submit_ad_order(query, context):
+    if context.user_data.get("mode") != "ad_preview":
+        await query.message.reply_text(" Aktif reklam onizlemesi yok.")
+        return
+    package_id = context.user_data.get("ad_package_id")
+    p = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
+    if not p:
+        context.user_data.clear()
+        await query.message.reply_text(" Reklam paketi bulunamadi.")
+        return
+    price = int(p.get("price") or 0)
+    balance = await get_ad_balance(query.from_user.id)
+    if balance < price:
+        context.user_data.clear()
+        await query.message.reply_text(" Bakiyen yetersiz. Islem iptal edildi.")
+        return
+    ok = await change_ad_balance(query.from_user.id, -price, "ad_hold", "Reklam talebi icin bakiye dusuldu")
+    if not ok:
+        context.user_data.clear()
+        await query.message.reply_text(" Bakiye dusulemedi. Islem iptal edildi.")
+        return
+    order = {
+        "user_id": query.from_user.id,
+        "username": safe_username(query.from_user),
+        "package_id": package_id,
+        "title": context.user_data.get("ad_title"),
+        "ad_text": context.user_data.get("ad_text"),
+        "link": context.user_data.get("ad_link"),
+        "status": "pending",
+        "price": price,
+    }
+    res = supabase.table("ad_orders").insert(order).execute()
+    order_id = res.data[0]["id"] if res.data else None
+    await log_event("ad_order_created", query.from_user.id, query.from_user.id, details=f"order_id={order_id}, price={price}")
+    context.user_data.clear()
+    await query.message.reply_text(" Reklam talebin admin onayina gonderildi.")
+    await query.message.reply_text(f"Kalan bakiye: {await get_ad_balance(query.from_user.id)} Stars")
+    try:
+        await context.bot.send_message(OWNER_ID, f" Yeni reklam talebi\n\nOrder ID: {order_id}\nKullanici: @{safe_username(query.from_user) or 'yok'}\nFiyat: {price} Stars\nBaslik: {order['title']}")
+    except Exception:
+        pass
+
+
+async def my_ad_orders(message, user_id):
+    rows = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
+    if not rows:
+        await message.reply_text(" Henuz reklam talebin yok.")
+        return
+    text = "\U0001f4c4 Reklamlarim\n\n"
+    for o in rows:
+        text += f"#{o['id']} | {o.get('status')} | {o.get('price')} Stars\n{o.get('title')}\n\n"
+    await message.reply_text(text[:3900])
+
+
+async def ad_orders_admin_message(message):
+    rows = supabase.table("ad_orders").select("*").eq("status", "pending").order("id", desc=True).limit(20).execute().data or []
+    if not rows:
+        await message.reply_text(" Bekleyen reklam talebi yok.")
+        return
+    for o in rows:
+        p = None
+        try:
+            p = supabase.table("ad_packages").select("*").eq("id", o.get("package_id")).single().execute().data
+        except Exception:
+            pass
+        kb = [[InlineKeyboardButton("Onayla ve Yayinla", callback_data=f"ad_approve_{o['id']}"), InlineKeyboardButton("Reddet ve Iade", callback_data=f"ad_reject_{o['id']}")]]
+        await message.reply_text(
+            f"\U0001f4e3 Reklam Talebi #{o['id']}\n\n"
+            f"Kullanici: @{o.get('username') or 'yok'}\n"
+            f"User ID: {o.get('user_id')}\n"
+            f"Paket: {(p or {}).get('name') or o.get('package_id')}\n"
+            f"Fiyat: {o.get('price')} Stars\n\n"
+            f"Baslik: {o.get('title')}\n\n"
+            f"Metin:\n{o.get('ad_text')}\n\n"
+            f"Link: {o.get('link')}",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+
+
+async def ad_packages_admin_message(message):
+    await ensure_default_ad_packages()
+    rows = supabase.table("ad_packages").select("*").order("id").execute().data or []
+    for p in rows:
+        status = "Aktif" if p.get("active") else "Pasif"
+        target = "Tum kanallar" if p.get("target_type") == "all" else f"Tek kanal / channel_id={p.get('channel_id') or 'ilk aktif kanal'}"
+        kb = [[InlineKeyboardButton("Ac/Kapat", callback_data=f"adpkg_toggle_{p['id']}")]]
+        await message.reply_text(f"Paket ID: {p['id']}\nAd: {p.get('name')}\nFiyat: {p.get('price')} Stars\nHedef: {target}\nDurum: {status}\nAciklama: {p.get('description') or '-'}", reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def ad_balances_admin_message(message):
+    rows = supabase.table("ad_balances").select("*").order("balance", desc=True).limit(20).execute().data or []
+    if not rows:
+        await message.reply_text(" Bakiye kaydi yok.")
+        return
+    text = "\U0001f4b0 Reklam Bakiyeleri\n\n"
+    for r in rows:
+        text += f"User ID: {r.get('user_id')} | Bakiye: {r.get('balance')} | Harcanan: {r.get('spent') or 0}\n"
+    await message.reply_text(text[:3900])
+
+
+async def toggle_ad_package(message, package_id, admin_id):
+    row = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
+    if not row:
+        await message.reply_text(" Paket bulunamadi.")
+        return
+    supabase.table("ad_packages").update({"active": not bool(row.get("active"))}).eq("id", package_id).execute()
+    await log_event("ad_package_toggled", admin_id, details=f"package_id={package_id}")
+    await message.reply_text(" Reklam paketi durumu degistirildi.")
+
+
+def build_ad_message(order):
+    return f"\U0001f4e3 Sponsorlu Reklam\n\n{order.get('title')}\n\n{order.get('ad_text')}"
+
+
+async def publish_ad_to_targets(context, order, package):
+    channels = []
+    if package.get("target_type") == "all":
+        channels = supabase.table("channels").select("*").eq("active", True).execute().data or []
+    else:
+        cid = package.get("channel_id")
+        if cid:
+            ch = await get_channel(cid)
+            if ch:
+                channels = [ch]
+        else:
+            rows = supabase.table("channels").select("*").eq("active", True).order("id").limit(1).execute().data or []
+            channels = rows
+    sent = []
+    errors = []
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Incele", url=order.get("link"))]])
+    for ch in channels:
+        chat_id = ch.get("chat_id")
+        if not chat_id:
+            continue
+        try:
+            msg = await context.bot.send_message(chat_id=int(chat_id), text=build_ad_message(order), reply_markup=kb, disable_web_page_preview=False)
+            sent.append(f"{chat_id}:{msg.message_id}")
+        except Exception as e:
+            errors.append(f"{chat_id}:{e}")
+    return sent, errors
+
+
+async def approve_and_publish_ad(message, context, order_id, admin_id):
+    order = supabase.table("ad_orders").select("*").eq("id", order_id).single().execute().data
+    if not order:
+        await message.reply_text(" Reklam talebi bulunamadi.")
+        return
+    if order.get("status") != "pending":
+        await message.reply_text(f" Bu reklam artik pending degil. Durum: {order.get('status')}")
+        return
+    package = supabase.table("ad_packages").select("*").eq("id", order.get("package_id")).single().execute().data
+    if not package:
+        await reject_and_refund_ad(message, order_id, admin_id, reason="Paket bulunamadi")
+        return
+    sent, errors = await publish_ad_to_targets(context, order, package)
+    if sent:
+        supabase.table("ad_orders").update({"status": "published", "published_message_ids": ",".join(sent), "published_at": now_utc().isoformat()}).eq("id", order_id).execute()
+        await log_event("ad_published", admin_id, order.get("user_id"), details=f"order_id={order_id}, sent={len(sent)}, errors={len(errors)}")
+        await message.reply_text(f" Reklam yayinlandi. Gonderilen kanal/grup: {len(sent)}")
+        try:
+            await context.bot.send_message(order.get("user_id"), f" Reklamin onaylandi ve yayinlandi.\n\nReklam ID: {order_id}")
+        except Exception:
+            pass
+    else:
+        await change_ad_balance(order.get("user_id"), int(order.get("price") or 0), "ad_auto_refund", "Reklam yayinlanamadi, otomatik iade", order_id)
+        supabase.table("ad_orders").update({"status": "failed_refunded", "reject_reason": "; ".join(errors)[:900]}).eq("id", order_id).execute()
+        await log_event("ad_publish_failed_refunded", admin_id, order.get("user_id"), details=f"order_id={order_id}")
+        await message.reply_text(" Reklam yayinlanamadi. Bakiye otomatik iade edildi. Botun kanalda admin ve mesaj gonderme yetkisi oldugunu kontrol et.")
+
+
+async def reject_and_refund_ad(message, order_id, admin_id, reason="Admin reddetti"):
+    order = supabase.table("ad_orders").select("*").eq("id", order_id).single().execute().data
+    if not order:
+        await message.reply_text(" Reklam talebi bulunamadi.")
+        return
+    if order.get("status") != "pending":
+        await message.reply_text(f" Bu reklam artik pending degil. Durum: {order.get('status')}")
+        return
+    await change_ad_balance(order.get("user_id"), int(order.get("price") or 0), "ad_refund", reason, order_id)
+    supabase.table("ad_orders").update({"status": "rejected_refunded", "reject_reason": reason}).eq("id", order_id).execute()
+    await log_event("ad_rejected_refunded", admin_id, order.get("user_id"), details=f"order_id={order_id}")
+    await message.reply_text(" Reklam reddedildi ve bakiye iade edildi.")
 
 # =========================================================
 # JOBS
