@@ -40,8 +40,32 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID", "957422314"))
+
+# AI provider settings
+# Recommended free/limited setup:
+#   AI_PROVIDER=groq
+#   GROQ_API_KEY=gsk_...
+#   AI_MODEL=llama-3.1-8b-instant
+# OpenAI also remains supported:
+#   AI_PROVIDER=openai
+#   OPENAI_API_KEY=sk-...
+#   AI_MODEL=gpt-4o-mini
+AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+AI_MODEL = os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+OPENAI_MODEL = AI_MODEL  # backward compatibility
+
+if not AI_PROVIDER:
+    if GROQ_API_KEY:
+        AI_PROVIDER = "groq"
+    elif OPENAI_API_KEY:
+        AI_PROVIDER = "openai"
+
+# If Groq is selected and no explicit AI_MODEL was provided, use a current Groq production model.
+if AI_PROVIDER == "groq" and not os.getenv("AI_MODEL"):
+    AI_MODEL = "llama-3.1-8b-instant"
+    OPENAI_MODEL = AI_MODEL
 
 DEFAULT_DURATION_DAYS = 30
 INVITE_LINK_EXPIRE_MINUTES = 30
@@ -360,20 +384,70 @@ async def log_event(action, actor_id=None, target_user_id=None, channel_id=None,
         logger.warning("Log yazilamadi: %s", e)
 
 def ai_available():
-    return bool(OPENAI_API_KEY) and OpenAI is not None
+    if OpenAI is None:
+        return False
+    if AI_PROVIDER == "groq":
+        return bool(GROQ_API_KEY)
+    if AI_PROVIDER == "openai":
+        return bool(OPENAI_API_KEY)
+    return bool(GROQ_API_KEY or OPENAI_API_KEY)
+
+
+def ai_provider_label():
+    if AI_PROVIDER == "groq":
+        return "Groq"
+    if AI_PROVIDER == "openai":
+        return "OpenAI"
+    return "AI"
+
+
+def _make_ai_client():
+    if OpenAI is None:
+        raise RuntimeError("openai paketi yuklu degil. requirements.txt icine openai ekle.")
+
+    if AI_PROVIDER == "groq":
+        if not GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY yok.")
+        return OpenAI(
+            api_key=GROQ_API_KEY,
+            base_url="https://api.groq.com/openai/v1",
+        )
+
+    if AI_PROVIDER == "openai":
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY yok.")
+        return OpenAI(api_key=OPENAI_API_KEY)
+
+    # Auto fallback: Groq preferred if key exists.
+    if GROQ_API_KEY:
+        return OpenAI(
+            api_key=GROQ_API_KEY,
+            base_url="https://api.groq.com/openai/v1",
+        )
+    if OPENAI_API_KEY:
+        return OpenAI(api_key=OPENAI_API_KEY)
+
+    raise RuntimeError("AI anahtari yok. GROQ_API_KEY veya OPENAI_API_KEY ekle.")
 
 
 def _ai_text_sync(instructions, user_input, max_output_tokens=500):
     if not ai_available():
-        raise RuntimeError("OPENAI_API_KEY yok veya openai paketi yuklu degil.")
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    response = client.responses.create(
-        model=OPENAI_MODEL,
-        instructions=instructions,
-        input=user_input,
-        max_output_tokens=max_output_tokens,
+        raise RuntimeError("AI aktif degil. GROQ_API_KEY/OPENAI_API_KEY veya openai paketi eksik.")
+
+    client = _make_ai_client()
+
+    # Groq supports OpenAI-compatible Chat Completions.
+    # OpenAI also supports this API, so this single path works for both providers.
+    response = client.chat.completions.create(
+        model=AI_MODEL,
+        messages=[
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": user_input},
+        ],
+        temperature=0.4,
+        max_tokens=max_output_tokens,
     )
-    return (response.output_text or "").strip()
+    return (response.choices[0].message.content or "").strip()
 
 
 async def ai_text(instructions, user_input, max_output_tokens=500):
@@ -396,8 +470,11 @@ def extract_json_object(raw):
 
 def ai_missing_text():
     return (
-        "Yapay zeka aktif degil. Railway > Variables kismina OPENAI_API_KEY ekle ve "
-        "requirements.txt icine openai satirini koy."
+        "Yapay zeka aktif degil. Railway > Variables kismina sunlari ekle:\n"
+        "GROQ_API_KEY = gsk_...\n"
+        "AI_PROVIDER = groq\n"
+        "AI_MODEL = llama-3.1-8b-instant\n\n"
+        "Ayrica requirements.txt icinde openai satiri olmali."
     )
 
 
@@ -1354,7 +1431,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error("AI reklam hatasi: %s", e)
                 context.user_data.clear()
-                await update.message.reply_text("AI reklam olusturulamadi. API anahtarini ve Railway loglarini kontrol et.")
+                await update.message.reply_text("AI reklam olusturulamadi. GROQ_API_KEY / AI_MODEL ve Railway loglarini kontrol et.")
 
         elif mode == "ai_support_question":
             if not ai_available():
@@ -3435,7 +3512,7 @@ async def ai_check_ad_order_message(message, order_id):
         await message.reply_text(f"\U0001f916 AI Reklam Kontrolu #{order_id}\n\n{result}\n\nSon karar yine adminde. Gerekirse Onayla veya Reddet butonlarini kullan.")
     except Exception as e:
         logger.error("AI reklam kontrol hatasi: %s", e)
-        await message.reply_text("AI kontrol yapilamadi. OPENAI_API_KEY, model ve Railway loglarini kontrol et.")
+        await message.reply_text("AI kontrol yapilamadi. GROQ_API_KEY / AI_MODEL ve Railway loglarini kontrol et.")
 
 
 async def ad_orders_admin_message(message):
