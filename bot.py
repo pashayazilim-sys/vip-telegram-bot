@@ -92,7 +92,6 @@ MAIN_MENU = ReplyKeyboardMarkup(
         ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
         ["\U0001f381 Referans"],
-        ["\U0001f39f\ufe0f Kupon Gir"],
         ["\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
@@ -107,7 +106,6 @@ ADMIN_MENU = ReplyKeyboardMarkup(
         ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
         ["\U0001f381 Referans"],
-        ["\U0001f39f\ufe0f Kupon Gir"],
         ["\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
@@ -876,12 +874,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await quick_start_message(update.message, is_admin(user.id))
 
 
+def save_detected_auto_video_chat(chat):
+    """Admin id yazd\u0131\u011f\u0131nda kanal\u0131 kaydeder. Sonra admin panelde butonla se\u00e7ilebilir."""
+    try:
+        chat_id = str(chat.id)
+        title = getattr(chat, "title", None) or getattr(chat, "username", None) or chat_id
+        chat_type = str(getattr(chat, "type", "") or "channel")
+        existing = supabase.table("auto_video_detected_chats").select("*").eq("chat_id", chat_id).execute().data or []
+        payload = {
+            "chat_id": chat_id,
+            "title": title,
+            "chat_type": chat_type,
+            "updated_at": now_utc().isoformat(),
+        }
+        if existing:
+            supabase.table("auto_video_detected_chats").update(payload).eq("chat_id", chat_id).execute()
+        else:
+            payload["created_at"] = now_utc().isoformat()
+            supabase.table("auto_video_detected_chats").insert(payload).execute()
+    except Exception as e:
+        logger.error("Detected chat save error: %s", e)
+
+
 async def channel_id_reader(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.channel_post:
         return
     text = (update.channel_post.text or "").lower().strip()
     if text in ["id", "chat id", "kanal id", "grup id", "group id", "kanalid"]:
-        await context.bot.send_message(chat_id=update.channel_post.chat_id, text=f"Chat ID:\n{update.channel_post.chat_id}")
+        save_detected_auto_video_chat(update.channel_post.chat)
+        await context.bot.send_message(
+            chat_id=update.channel_post.chat_id,
+            text=(
+                f"Chat ID:\n{update.channel_post.chat_id}\n\n"
+                "Bu kanal bot paneline kaydedildi.\n"
+                "Admin Panel > Otomatik Video > Butonlu Kurulum ile se\u00e7ebilirsin."
+            ),
+        )
 
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1134,7 +1162,7 @@ async def open_admin_panel(message):
         [InlineKeyboardButton("\U0001f4ca Son Sat\u0131\u015flar", callback_data="admin_sales"), InlineKeyboardButton("\U0001f4c8 Rapor", callback_data="admin_report")],
         [InlineKeyboardButton("\U0001f4e2 Kanal \u0130statistikleri", callback_data="admin_channel_stats"), InlineKeyboardButton("\U0001f6d2 Yar\u0131m Kalanlar", callback_data="admin_abandoned")],
         [InlineKeyboardButton("\U0001f465 Kullan\u0131c\u0131lar", callback_data="admin_users"), InlineKeyboardButton("\U0001f50d Kullan\u0131c\u0131 Ara", callback_data="admin_search_user")],
-        [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
+        [InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
         [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals")],
         [InlineKeyboardButton("\U0001f4cc Bekleyen \u0130\u015fler", callback_data="admin_pending_work")],
         [InlineKeyboardButton("\U0001f3ac Otomatik Video", callback_data="admin_auto_video")],
@@ -1298,10 +1326,12 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             await update.message.reply_text(f" Paket eklendi: {payload['name']}")
 
-        elif mode in ["edit_price", "edit_duration", "edit_chat", "edit_description", "edit_photo"]:
+        elif mode in ["edit_name", "edit_price", "edit_duration", "edit_chat", "edit_description", "edit_photo"]:
             channel_id = context.user_data.get("channel_id")
-            if mode == "edit_price":
-                field, value, reply = "price", int(text), " Fiyat guncellendi."
+            if mode == "edit_name":
+                field, value, reply = "name", text, "\u2705 Kanal adi guncellendi."
+            elif mode == "edit_price":
+                field, value, reply = "price", int(text), "\u2705 Fiyat guncellendi."
             elif mode == "edit_duration":
                 field, value, reply = "duration_days", int(text), " Sure guncellendi."
             elif mode == "edit_chat":
@@ -1726,7 +1756,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(parts) < 2:
                 await update.message.reply_text(
                     "Format: KaynakChatID | HedefChatID | Not\n\n"
-                    "Ornek:\n"
+                    "\u00d6rnek:\n"
                     "-1001111111111 | -1002222222222 | Depo -> Ana Kanal"
                 )
                 return
@@ -1751,7 +1781,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             await update.message.reply_text(
                 "\u2705 Otomatik video aktarma kuruldu.\n\n"
-                "Depo kanalina yeni video attiginda bot ana kanala sadece videoyu yollar. Video altindaki yazi silinir."
+                "Depo kanal\u0131na yeni video att\u0131\u011f\u0131nda bot ana kanala sadece videoyu yollar. Video alt\u0131ndaki yaz\u0131 silinir."
             )
 
         elif mode == "user_coupon":
@@ -1794,28 +1824,146 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # AUTO VIDEO TRANSFER
 # =========================================================
 
+def get_detected_auto_video_chats(limit=20):
+    try:
+        return (
+            supabase.table("auto_video_detected_chats")
+            .select("*")
+            .order("updated_at", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        logger.error("Detected chats read error: %s", e)
+        return []
+
+
+async def show_auto_video_chat_picker(message, context, role):
+    rows = get_detected_auto_video_chats()
+    if role == "source":
+        title = "1/2: Video depo kanal\u0131n\u0131 se\u00e7"
+        info = (
+            "A\u015fa\u011f\u0131dan video y\u00fckleyece\u011fin depo kanal\u0131n\u0131 se\u00e7.\n"
+            "Listede kanal yoksa \u00f6nce o kanala id yaz."
+        )
+        prefix = "av_src:"
+    else:
+        title = "2/2: Ana payla\u015f\u0131m kanal\u0131n\u0131 se\u00e7"
+        source = context.user_data.get("av_source_chat_id")
+        info = (
+            f"Depo kanal se\u00e7ildi: {source}\n"
+            "\u015eimdi videolar\u0131n payla\u015f\u0131laca\u011f\u0131 ana kanal\u0131 se\u00e7."
+        )
+        prefix = "av_tgt:"
+
+    if not rows:
+        await message.reply_text(
+            f"{title}\n\n"
+            "Kay\u0131tl\u0131 kanal bulunamad\u0131.\n\n"
+            "Yap\u0131lacaklar:\n"
+            "1. Botu depo ve ana kanala admin yap.\n"
+            "2. Her iki kanala da d\u00fcz mesaj olarak id yaz.\n"
+            "3. Buraya d\u00f6n\u00fcp tekrar Butonlu Kurulum'a bas."
+        )
+        return
+
+    kb = []
+    selected_source = context.user_data.get("av_source_chat_id")
+    for r in rows:
+        chat_id = str(r.get("chat_id"))
+        if role == "target" and chat_id == str(selected_source):
+            continue
+        label = f"{r.get('title') or 'Kanal'} | {chat_id}"
+        if len(label) > 60:
+            label = label[:57] + "..."
+        kb.append([InlineKeyboardButton(label, callback_data=f"{prefix}{chat_id}")])
+
+    kb.append([InlineKeyboardButton("\u274c \u0130ptal", callback_data="av_cancel_setup")])
+    await message.reply_text(f"{title}\n\n{info}", reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def create_auto_video_route_from_selection(message, context, source_chat_id, target_chat_id):
+    if not source_chat_id or not target_chat_id:
+        await message.reply_text("Kaynak veya hedef kanal se\u00e7ilmedi. Kurulumu yeniden ba\u015flat.")
+        return
+
+    source_row = None
+    target_row = None
+    for r in get_detected_auto_video_chats():
+        if str(r.get("chat_id")) == str(source_chat_id):
+            source_row = r
+        if str(r.get("chat_id")) == str(target_chat_id):
+            target_row = r
+
+    source_name = (source_row or {}).get("title") or "Video Depo"
+    target_name = (target_row or {}).get("title") or "Ana Kanal"
+    route_name = f"{source_name} -> {target_name}"
+
+    existing = (
+        supabase.table("auto_video_routes")
+        .select("*")
+        .eq("source_chat_id", str(source_chat_id))
+        .eq("target_chat_id", str(target_chat_id))
+        .execute()
+        .data
+        or []
+    )
+    payload = {
+        "source_chat_id": str(source_chat_id),
+        "target_chat_id": str(target_chat_id),
+        "name": route_name,
+        "active": True,
+        "strip_caption": True,
+    }
+
+    if existing:
+        supabase.table("auto_video_routes").update(payload).eq("id", existing[0]["id"]).execute()
+        route_id = existing[0]["id"]
+        action_text = "mevcut rota g\u00fcncellendi"
+    else:
+        result = supabase.table("auto_video_routes").insert(payload).execute()
+        route_id = (result.data or [{}])[0].get("id")
+        action_text = "yeni rota kuruldu"
+
+    await log_event("auto_video_route_button_setup", message.chat_id, details=str(payload))
+    context.user_data.pop("av_source_chat_id", None)
+    await message.reply_text(
+        "\u2705 Otomatik video aktarma haz\u0131r.\n\n"
+        f"Durum: {action_text}\n"
+        f"Depo kanal: {source_name}\n"
+        f"Ana kanal: {target_name}\n\n"
+        "Bundan sonra depo kanal\u0131na video att\u0131\u011f\u0131nda ana kanala sadece video gider. "
+        "Videonun alt\u0131ndaki yaz\u0131/caption g\u00f6nderilmez."
+    )
+
+
 async def admin_auto_video_menu(message):
     rows = supabase.table("auto_video_routes").select("*").order("id", desc=True).execute().data or []
-    kb = [[InlineKeyboardButton("\u2795 Kaynak/Hedef Ekle", callback_data="av_add")]]
+    kb = [
+        [InlineKeyboardButton("\U0001f9ed Butonlu Kurulum", callback_data="av_wizard")],
+        [InlineKeyboardButton("\u270d\ufe0f Elle Chat ID ile Ekle", callback_data="av_add")],
+    ]
     await message.reply_text(
         "\U0001f3ac Otomatik Video Aktarma\n\n"
-        "Bu sistem senin Video Depo kanalina attigin yeni videolari ana kanala otomatik yollar.\n"
-        "Depo kanalindaki video altinda yazi olsa bile ana kanala sadece video gider.\n\n"
-        "Kurulum:\n"
-        "1. Botu depo kanalina admin yap.\n"
+        "Depo kanal\u0131na att\u0131\u011f\u0131n yeni videolar ana kanala otomatik g\u00f6nderilir.\n"
+        "Depo kanal\u0131ndaki a\u00e7\u0131klama/caption silinir; ana kanala sadece video gider.\n\n"
+        "Kolay kurulum:\n"
+        "1. Botu depo kanal\u0131na admin yap.\n"
         "2. Botu ana kanala admin yap.\n"
-        "3. Iki kanala da duz mesaj olarak id yaz ve Chat ID'leri al.\n"
-        "4. Kaynak/Hedef Ekle butonuyla kaydet.",
+        "3. \u0130ki kanala da d\u00fcz mesaj olarak id yaz.\n"
+        "4. Butonlu Kurulum'a bas\u0131p depo ve ana kanal\u0131 se\u00e7.",
         reply_markup=InlineKeyboardMarkup(kb),
     )
     if not rows:
-        await message.reply_text("HenÃ¼z otomatik video rotasi yok.")
+        await message.reply_text("Hen\u00fcz otomatik video rotas\u0131 yok.")
         return
     for r in rows:
         status = "Aktif" if r.get("active") else "Pasif"
         route_kb = [
             [
-                InlineKeyboardButton("AÃ§/Kapat", callback_data=f"av_toggle_{r['id']}"),
+                InlineKeyboardButton("A\u00e7/Kapat", callback_data=f"av_toggle_{r['id']}"),
                 InlineKeyboardButton("Sil", callback_data=f"av_delete_{r['id']}"),
             ]
         ]
@@ -2154,16 +2302,36 @@ async def admin_callback(query, context, data):
         if not can_manage(user_id):
             await query.message.reply_text("\u274c Yetkin yok."); return
         await admin_auto_video_menu(query.message)
+    elif data == "av_wizard":
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok."); return
+        context.user_data.pop("av_source_chat_id", None)
+        await show_auto_video_chat_picker(query.message, context, "source")
+    elif data.startswith("av_src:"):
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok."); return
+        source_chat_id = data.split(":", 1)[1]
+        context.user_data["av_source_chat_id"] = source_chat_id
+        await show_auto_video_chat_picker(query.message, context, "target")
+    elif data.startswith("av_tgt:"):
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok."); return
+        target_chat_id = data.split(":", 1)[1]
+        source_chat_id = context.user_data.get("av_source_chat_id")
+        await create_auto_video_route_from_selection(query.message, context, source_chat_id, target_chat_id)
+    elif data == "av_cancel_setup":
+        context.user_data.pop("av_source_chat_id", None)
+        await query.message.reply_text("\u2705 Otomatik video kurulumu iptal edildi.")
     elif data == "av_add":
         if not can_manage(user_id):
             await query.message.reply_text("\u274c Yetkin yok."); return
         context.user_data["mode"] = "add_auto_video_route"
         await query.message.reply_text(
-            "Kaynak ve hedef Chat ID yaz:\n\n"
+            "Elle kurulum i\u00e7in kaynak ve hedef Chat ID yaz:\n\n"
             "KaynakChatID | HedefChatID | Not\n\n"
-            "Ornek:\n"
+            "\u00d6rnek:\n"
             "-1001111111111 | -1002222222222 | Video Depo -> Ana Kanal\n\n"
-            "Kaynak kanal video deposu, hedef kanal ana kanal olacak. Depo kanalindaki caption ana kanala gitmez."
+            "Daha kolay yol: Otomatik Video men\u00fcs\u00fcnden Butonlu Kurulum'u kullan."
         )
     elif data.startswith("av_toggle_"):
         if not can_manage(user_id):
@@ -2196,12 +2364,9 @@ async def admin_callback(query, context, data):
         context.user_data["mode"] = "search_user"
         await query.message.reply_text(" Kullanici ID veya username yaz:")
     elif data == "admin_coupons":
-        await coupons_message(query.message)
+        await query.message.reply_text("\U0001f39f\ufe0f Kupon sistemi su an kapali.")
     elif data == "coupon_add":
-        if not can_manage(user_id):
-            await query.message.reply_text(" Yetkin yok."); return
-        context.user_data["mode"] = "add_coupon"
-        await query.message.reply_text(" Kupon olustur:\n\nKOD | YuzdeIndirim | StarsIndirim | MaxKullanim | KanalID/0\n\nOrnek:\nPASHA50 | 50 | 0 | 100 | 0")
+        await query.message.reply_text("\U0001f39f\ufe0f Kupon sistemi su an kapali.")
     elif data.startswith("coupon_toggle_"):
         cid = int(data.split("_")[2])
         row = supabase.table("coupons").select("*").eq("id", cid).single().execute().data
@@ -2410,6 +2575,7 @@ async def handle_channel_admin_button(query, context):
         parts = data.split("_")
         action, cid = parts[1], int(parts[2])
         maps = {
+            "name": ("edit_name", "\u270f\ufe0f Yeni kanal adini yaz. Ornek: Pasha VIP"),
             "price": ("edit_price", " Yeni fiyati yaz. Ornek: 3000"),
             "duration": ("edit_duration", " Yeni sureyi gun olarak yaz. Ornek: 60"),
             "chat": ("edit_chat", " Yeni Chat ID yaz. Ornek: -1001234567890"),
@@ -2445,7 +2611,8 @@ async def list_channels_manage(message):
     for ch in rows:
         status = "Aktif " if ch.get("active") else "Pasif "
         kb = [
-            [InlineKeyboardButton(" Fiyat", callback_data=f"ch_price_{ch['id']}"), InlineKeyboardButton(" Sure", callback_data=f"ch_duration_{ch['id']}")],
+            [InlineKeyboardButton("\u270f\ufe0f Ad", callback_data=f"ch_name_{ch['id']}"), InlineKeyboardButton(" Fiyat", callback_data=f"ch_price_{ch['id']}")],
+            [InlineKeyboardButton(" Sure", callback_data=f"ch_duration_{ch['id']}")],
             [InlineKeyboardButton(" Chat ID", callback_data=f"ch_chat_{ch['id']}"), InlineKeyboardButton(" Aciklama", callback_data=f"ch_description_{ch['id']}")],
             [InlineKeyboardButton(" Gorsel", callback_data=f"ch_photo_{ch['id']}"), InlineKeyboardButton("Ac/Kapat", callback_data=f"ch_toggle_{ch['id']}")],
             [InlineKeyboardButton(" Sil", callback_data=f"ch_delete_{ch['id']}")],
@@ -2600,30 +2767,14 @@ async def get_coupon(code):
 
 
 async def calculate_price(user_id, base_price, channel_id=None):
+    """Kupon sistemi su an kapali. Sadece genel kampanya indirimi uygulanir."""
     price = max(1, int(base_price))
-    camp = campaign_percent()
+    camp = active_campaign_percent()
+    discount_text = None
     if camp:
-        price = int(price * (100 - camp) / 100)
-    row = await get_user_row(user_id)
-    code = row.get("active_coupon") if row else None
-    coupon = await get_coupon(code) if code else None
-    if not coupon or not coupon.get("active"):
-        return max(1, price), None, None
-    coupon_channel = coupon.get("channel_id")
-    if coupon_channel and channel_id and int(coupon_channel) != int(channel_id):
-        return max(1, price), None, None
-    max_uses = int(coupon.get("max_uses") or 0)
-    used = int(coupon.get("used_count") or 0)
-    if max_uses > 0 and used >= max_uses:
-        return max(1, price), None, None
-    percent = int(coupon.get("discount_percent") or 0)
-    stars = int(coupon.get("discount_stars") or 0)
-    if percent > 0:
-        price = int(price * (100 - percent) / 100)
-    if stars > 0:
-        price -= stars
-    discount_text = f"%{percent} indirim" if percent > 0 else f"{stars} Stars indirim"
-    return max(1, price), code.upper(), discount_text
+        price = max(1, int(price * (100 - camp) / 100))
+        discount_text = f"%{camp} kampanya indirimi"
+    return max(1, price), None, discount_text
 
 
 async def create_checkout_intent(user, item_type, item_id, price, payload):
@@ -4270,10 +4421,9 @@ async def expire_old_subscriptions(context: ContextTypes.DEFAULT_TYPE):
             if ch:
                 await remove_user_from_channel(context, ch, sub["user_id"])
             supabase.table("subscriptions").update({"status": "expired"}).eq("id", sub["id"]).execute()
-            supabase.table("users").update({"active_coupon": "WINBACK20"}).eq("user_id", sub["user_id"]).execute()
             await log_event("subscription_expired", None, sub["user_id"], sub["channel_id"])
             try:
-                await context.bot.send_message(sub["user_id"], " VIP uyelik suren bitti. 48 saat icinde yenilersen WINBACK20 kuponuyla %20 indirim alirsin.")
+                await context.bot.send_message(sub["user_id"], "\u23f0 VIP uyelik suren bitti. Yeniden satin almak icin VIP Kanallar bolumunu kullanabilirsin.")
             except Exception:
                 pass
 
@@ -4370,7 +4520,7 @@ app.add_handler(PreCheckoutQueryHandler(precheckout))
 app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
-app.job_queue.run_repeating(expire_old_subscriptions_job, interval=3600, first=30)
+app.job_queue.run_repeating(expire_old_subscriptions_job, interval=1800, first=30)
 app.job_queue.run_repeating(warning_job, interval=21600, first=60)
 app.job_queue.run_repeating(abandoned_checkout_job, interval=1800, first=300)
 app.job_queue.run_repeating(daily_report_job, interval=43200, first=600)
