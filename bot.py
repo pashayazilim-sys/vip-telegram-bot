@@ -841,6 +841,7 @@ async def show_vip_channels(message, user_id):
     if not rows:
         await message.reply_text("\U0001f4e2 Hen\u00fcz VIP kanal eklenmedi.")
         return
+
     for ch in rows:
         base_price = safe_int(ch.get("price"), 0)
         final_price, coupon_code, discount_text = await calculate_price(user_id, base_price, ch.get("id"))
@@ -848,18 +849,32 @@ async def show_vip_channels(message, user_id):
         title = "\U0001f525 Bug\u00fcne \u00f6zel VIP eri\u015fim" if variant == "B" else "\U0001f4e2 VIP Kanal"
         campaign_line = f"\n\U0001f525 Kampanya indirimi: %{campaign_percent()}" if campaign_percent() else ""
         coupon_line = f"\n\U0001f39f\ufe0f Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
+        description_line = f"\n\n\U0001f4dd {ch.get('description')}" if ch.get("description") else ""
         text = (
             f"{title}\n\n"
             f"\U0001f4e2 {ch.get('name')}\n"
             f"\u2b50 Fiyat: {base_price} Stars\n"
             f"\u2705 \u00d6denecek: {final_price} Stars\n"
             f"\u23f3 S\u00fcre: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} g\u00fcn"
-            f"{campaign_line}{coupon_line}"
+            f"{campaign_line}{coupon_line}{description_line}"
         )
         kb = [
             [InlineKeyboardButton("\U0001f441\ufe0f \u00d6nizleme", callback_data=f"preview_channel_{ch['id']}")],
             [InlineKeyboardButton(f"\u2b50 {final_price} Stars ile Sat\u0131n Al", callback_data=f"buyc_{ch['id']}")],
         ]
+
+        photo_url = ch.get("photo_url")
+        if photo_url:
+            try:
+                await message.reply_photo(
+                    photo=photo_url,
+                    caption=text,
+                    reply_markup=InlineKeyboardMarkup(kb),
+                )
+                continue
+            except Exception as e:
+                logger.error("Kanal gorseli gonderilemedi, text fallback kullaniliyor: %s", e)
+
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -927,7 +942,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if mode == "add_channel":
             parts = [p.strip() for p in text.split("|")]
             if len(parts) < 4:
-                await update.message.reply_text(" Format: KanalAdi | Fiyat | ChatID | SureGun | Aciklama")
+                await update.message.reply_text(" Format: KanalAdi | Fiyat | ChatID | SureGun | Aciklama | GorselURL")
                 return
             payload = {
                 "name": parts[0],
@@ -935,7 +950,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "chat_id": parts[2],
                 "duration_days": int(parts[3]),
                 "description": parts[4] if len(parts) >= 5 else None,
-                "photo_url": None,
+                "photo_url": parts[5] if len(parts) >= 6 and parts[5] not in ["", "-"] else None,
                 "invite_link": "",
                 "active": True,
             }
@@ -1450,7 +1465,7 @@ async def admin_callback(query, context, data):
         if not can_manage(user_id):
             await query.message.reply_text(" Yetkin yok."); return
         context.user_data["mode"] = "add_channel"
-        await query.message.reply_text(" Kanal bilgilerini yaz:\n\nKanalAdi | Fiyat | ChatID | SureGun | Aciklama\n\nOrnek:\nVIP | 2500 | -1001234567890 | 30 | Gunluk VIP kanal")
+        await query.message.reply_text(" Kanal bilgilerini yaz:\n\nKanalAdi | Fiyat | ChatID | SureGun | Aciklama | GorselURL\n\nOrnek:\nVIP | 2500 | -1001234567890 | 30 | Gunluk VIP kanal | https://site.com/resim.jpg\n\nGorsel yoksa son kismi bos birakabilirsin.")
     elif data == "admin_add_package":
         if not can_manage(user_id):
             await query.message.reply_text(" Yetkin yok."); return
