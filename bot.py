@@ -58,10 +58,7 @@ MAIN_MENU = ReplyKeyboardMarkup(
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
         ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
         ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
-        ["\U0001f4b0 Bakiyem", "\u2b50 Bakiye Y\u00fckle"],
-        ["\U0001f4e3 Reklam Ver", "\U0001f4c4 Reklamlar\u0131m"],
-        ["\U0001f4b0 Bakiyem", "\u2b50 Bakiye Y\u00fckle"],
-        ["\U0001f4e3 Reklam Ver", "\U0001f4c4 Reklamlar\u0131m"],
+        ["\U0001f4b0 Bakiye"],
         ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
@@ -75,6 +72,7 @@ ADMIN_MENU = ReplyKeyboardMarkup(
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
         ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
         ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
+        ["\U0001f4b0 Bakiye"],
         ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
@@ -97,6 +95,7 @@ LABEL_TO_KEY = {
     "\U0001f389 Cekilis": "Cekilis",
     "\U0001f39f\ufe0f Kupon Gir": "Kupon Gir",
     "\U0001f39f Kupon Gir": "Kupon Gir",
+    "\U0001f4b0 Bakiye": "Bakiye Merkezi",
     "\U0001f4b0 Bakiyem": "Bakiyem",
     "\u2b50 Bakiye Y\u00fckle": "Bakiye Yukle",
     "\u2b50 Bakiye Yukle": "Bakiye Yukle",
@@ -123,6 +122,8 @@ LABEL_TO_KEY = {
     "Cekilis": "Cekilis",
     "\u00c7ekili\u015f": "Cekilis",
     "Kupon Gir": "Kupon Gir",
+    "Bakiye": "Bakiye Merkezi",
+    "Bakiye Merkezi": "Bakiye Merkezi",
     "Bakiyem": "Bakiyem",
     "Bakiye Yukle": "Bakiye Yukle",
     "Bakiye Y\u00fckle": "Bakiye Yukle",
@@ -607,10 +608,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "Kupon Gir":
         context.user_data["mode"] = "user_coupon"
         await update.message.reply_text("\U0001f39f\ufe0f Kupon kodunu yaz:")
-    elif text == "Bakiyem":
-        await show_ad_balance(update.message, user_id)
+    elif text in ["Bakiye Merkezi", "Bakiyem"]:
+        await show_balance_center(update.message, user_id)
     elif text == "Bakiye Yukle":
-        await show_topup_options(update.message)
+        await ask_custom_topup_amount(update.message, context)
     elif text == "Reklam Ver":
         await show_ad_packages_user(update.message, user_id)
     elif text == "Reklamlarim":
@@ -939,6 +940,21 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await search_user(update.message, text)
             context.user_data.clear()
 
+        elif mode == "ad_topup_amount":
+            amount_text = raw_text.replace(" ", "").strip()
+            if not amount_text.isdigit():
+                await update.message.reply_text("Lutfen sadece rakam yaz. Ornek: 2500")
+                return
+            amount = int(amount_text)
+            if amount < 50:
+                await update.message.reply_text("Minimum yukleme 50 Stars olmalidir.")
+                return
+            if amount > 100000:
+                await update.message.reply_text("Tek seferde en fazla 100000 Stars yukleyebilirsin.")
+                return
+            context.user_data.clear()
+            await send_custom_topup_invoice(update.message, context, amount)
+
         elif mode == "add_ad_package":
             if not can_manage(user_id):
                 context.user_data.clear()
@@ -1060,6 +1076,21 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data.startswith("support_auto_"):
         await support_auto_answer(query.message, data.split("_", 2)[2])
+        return
+    if data == "ad_balance_center":
+        await show_balance_center(query.message, user_id)
+        return
+    if data == "ad_topup_custom":
+        await ask_custom_topup_amount(query.message, context)
+        return
+    if data == "ad_show_packages":
+        await show_ad_packages_user(query.message, user_id)
+        return
+    if data == "ad_my_orders":
+        await my_ad_orders(query.message, user_id)
+        return
+    if data == "ad_transactions":
+        await show_ad_transactions(query.message, user_id)
         return
     if data.startswith("topup_"):
         await handle_topup(query, context)
@@ -2267,42 +2298,101 @@ async def ensure_default_ad_packages():
         logger.warning("default ad packages failed: %s", e)
 
 
-async def show_ad_balance(message, user_id):
+async def show_balance_center(message, user_id):
     balance = await get_ad_balance(user_id)
+    rows = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data or []
+    spent = int(rows[0].get("spent") or 0) if rows else 0
     orders = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).execute().data or []
     pending = len([o for o in orders if o.get("status") == "pending"])
     published = len([o for o in orders if o.get("status") == "published"])
+    rejected = len([o for o in orders if str(o.get("status") or "").startswith("rejected")])
+
+    kb = [
+        [InlineKeyboardButton("\u2b50 Bakiye Ekle", callback_data="ad_topup_custom")],
+        [InlineKeyboardButton("\U0001f4e3 Kanallara Reklam Ver", callback_data="ad_show_packages")],
+        [InlineKeyboardButton("\U0001f4c4 Reklamlar\u0131m", callback_data="ad_my_orders")],
+        [InlineKeyboardButton("\U0001f9fe Bakiye Hareketleri", callback_data="ad_transactions")],
+    ]
+
     await message.reply_text(
-        f"\U0001f4b0 Reklam Bakiyen\n\n"
-        f"Bakiye: {balance} Stars\n"
+        f"\U0001f4b0 Bakiye Merkezi\n\n"
+        f"Mevcut bakiye: {balance} Stars\n"
+        f"Toplam harcanan: {spent} Stars\n\n"
         f"Bekleyen reklam: {pending}\n"
-        f"Yayindaki/yayinlanan reklam: {published}\n\n"
-        f"Bakiye yuklemek icin: \u2b50 Bakiye Yukle"
+        f"Yay\u0131nlanan reklam: {published}\n"
+        f"Reddedilen/iade edilen reklam: {rejected}\n\n"
+        f"Ne yapmak istiyorsun?",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+
+
+async def show_ad_balance(message, user_id):
+    await show_balance_center(message, user_id)
+
+
+async def ask_custom_topup_amount(message, context):
+    context.user_data.clear()
+    context.user_data["mode"] = "ad_topup_amount"
+    await message.reply_text(
+        "\u2b50 Bakiye Ekle\n\n"
+        "Y\u00fcklemek istedi\u011fin Stars miktar\u0131n\u0131 yaz.\n\n"
+        "\u00d6rnek:\n"
+        "2500\n\n"
+        "Minimum: 50 Stars\n"
+        "Maksimum: 100000 Stars"
     )
 
 
 async def show_topup_options(message):
-    kb = [
-        [InlineKeyboardButton("1000 Stars", callback_data="topup_1000"), InlineKeyboardButton("2500 Stars", callback_data="topup_2500")],
-        [InlineKeyboardButton("5000 Stars", callback_data="topup_5000"), InlineKeyboardButton("10000 Stars", callback_data="topup_10000")],
-    ]
-    await message.reply_text("\u2b50 Reklam bakiyesi yukle\n\nYuklemek istedigin tutari sec:", reply_markup=InlineKeyboardMarkup(kb))
+    await message.reply_text(
+        "\u2b50 Bakiye Ekle\n\n"
+        "Art\u0131k sabit tutar butonu yok. Bakiye Merkezi > Bakiye Ekle ile istedi\u011fin tutar\u0131 yazabilirsin.\n"
+        "\u00d6rnek: 2500"
+    )
 
 
-async def handle_topup(query, context):
-    amount = int(query.data.split("_")[1])
-    if amount not in [1000, 2500, 5000, 10000]:
-        await query.message.reply_text(" Gecersiz tutar.")
-        return
+async def send_custom_topup_invoice(message, context, amount):
     await context.bot.send_invoice(
-        chat_id=query.message.chat_id,
+        chat_id=message.chat_id,
         title="Reklam Bakiyesi",
-        description=f"{amount} Stars reklam bakiyesi yukleme",
+        description=f"{amount} Stars reklam bakiyesi y\u00fckleme",
         payload=f"topup_{amount}",
         provider_token="",
         currency="XTR",
         prices=[LabeledPrice(label="Reklam Bakiyesi", amount=amount)],
     )
+
+
+async def handle_topup(query, context):
+    try:
+        amount = int(query.data.split("_")[1])
+    except Exception:
+        await query.message.reply_text("Ge\u00e7ersiz tutar.")
+        return
+    if amount < 50 or amount > 100000:
+        await query.message.reply_text("Ge\u00e7ersiz tutar. 50 ile 100000 Stars aras\u0131 olmal\u0131.")
+        return
+    await context.bot.send_invoice(
+        chat_id=query.message.chat_id,
+        title="Reklam Bakiyesi",
+        description=f"{amount} Stars reklam bakiyesi y\u00fckleme",
+        payload=f"topup_{amount}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label="Reklam Bakiyesi", amount=amount)],
+    )
+
+
+async def show_ad_transactions(message, user_id):
+    rows = supabase.table("ad_transactions").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
+    if not rows:
+        await message.reply_text("Hen\u00fcz bakiye hareketi yok.")
+        return
+    text = "\U0001f9fe Son Bakiye Hareketleri\n\n"
+    for r in rows:
+        sign = "+" if int(r.get("amount") or 0) > 0 else ""
+        text += f"{sign}{r.get('amount')} Stars | {r.get('type')}\n{r.get('description') or '-'}\n{r.get('created_at')}\n\n"
+    await message.reply_text(text[:3900])
 
 
 async def show_ad_packages_user(message, user_id):
