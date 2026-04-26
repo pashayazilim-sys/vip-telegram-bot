@@ -55,12 +55,12 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         ["\U0001f680 H\u0131zl\u0131 Ba\u015fla", "\U0001f4cc Durumum"],
-        ["\U0001f4e2 VIP Kanallar", "\U0001f4e6 Paketler"],
+        ["\U0001f4e2 VIP Kanallar"],
         ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
-        ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
-        ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
-        ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
+        ["\U0001f381 Referans"],
+        ["\U0001f39f\ufe0f Kupon Gir"],
+        ["\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
     resize_keyboard=True,
@@ -70,12 +70,12 @@ ADMIN_MENU = ReplyKeyboardMarkup(
     [
         ["\U0001f451 Admin Panel"],
         ["\U0001f680 H\u0131zl\u0131 Ba\u015fla", "\U0001f4cc Durumum"],
-        ["\U0001f4e2 VIP Kanallar", "\U0001f4e6 Paketler"],
+        ["\U0001f4e2 VIP Kanallar"],
         ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
         ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
-        ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
-        ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
-        ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
+        ["\U0001f381 Referans"],
+        ["\U0001f39f\ufe0f Kupon Gir"],
+        ["\u2753 SSS"],
         ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
     resize_keyboard=True,
@@ -609,7 +609,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "VIP Kanallar":
         await show_vip_channels(update.message, user_id)
     elif text == "Paketler":
-        await show_packages(update.message, user_id)
+        await update.message.reply_text("\U0001f4e6 Paket sistemi kald\u0131r\u0131ld\u0131. Sat\u0131n almak i\u00e7in VIP Kanallar b\u00f6l\u00fcm\u00fcn\u00fc kullan.")
     elif text == "Uyeligim":
         await show_my_subscriptions(update.message, user_id)
     elif text == "Gecmisim":
@@ -617,11 +617,11 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "Referans":
         await referral_user_message(update.message, context, user_id)
     elif text == "Liderlik":
-        await leaderboard_message(update.message)
+        await update.message.reply_text("\U0001f3c6 Liderlik kald\u0131r\u0131ld\u0131. Referans linkini yine Referans b\u00f6l\u00fcm\u00fcnden alabilirsin.")
     elif text == "Cekilis":
-        await giveaway_user_message(update.message)
+        await update.message.reply_text("\U0001f389 \u00c7ekili\u015f kald\u0131r\u0131ld\u0131. VIP kazanmak i\u00e7in Referans b\u00f6l\u00fcm\u00fcn\u00fc kullanabilirsin.")
     elif text == "Iptal Talebi":
-        await create_cancel_request(update, context)
+        await update.message.reply_text("\u274c \u0130ptal talebi art\u0131k sadece \u00dcyeli\u011fim ekran\u0131ndaki aktif aboneli\u011fin alt\u0131ndan olu\u015fturulur.\n\n\U0001f4c5 \u00dcyeli\u011fim > aboneli\u011fin alt\u0131ndaki \u0130ptal talebi butonu")
     elif text == "Kupon Gir":
         context.user_data["mode"] = "user_coupon"
         await update.message.reply_text("\U0001f39f\ufe0f Kupon kodunu yaz:")
@@ -647,10 +647,11 @@ async def help_message(message):
     await message.reply_text(
         "\u2139\ufe0f Yard\u0131m\n\n"
         "\U0001f4e2 VIP Kanallar: Sat\u0131n al\u0131nabilir kanallar\u0131 g\u00f6sterir.\n"
-        "\U0001f4e6 Paketler: Birden fazla kanal\u0131 avantajl\u0131 paketle verir.\n"
+
         "\U0001f4c5 \u00dcyeli\u011fim: Aktif \u00fcyeliklerini ve link yenilemeyi g\u00f6sterir.\n"
         "\U0001f381 Referans: Arkada\u015f getirip puan kazan\u0131rs\u0131n.\n"
-        "\U0001f3c6 Liderlik: En \u00e7ok davet yapanlar\u0131 g\u00f6sterir.\n"
+
+        "\u274c \u0130ptal: Sadece \u00dcyeli\u011fim ekran\u0131ndaki abonelik kart\u0131ndan yap\u0131l\u0131r.\n"
         "\u2753 SSS: Grup/kanal ve \u00f6deme sorunlar\u0131 i\u00e7in haz\u0131r cevaplar.\n"
         "\U0001f4b0 Bakiyem: Reklam bakiyeni g\u00f6sterir.\n"
         "\U0001f4e3 Reklam Ver: Reklam talebi olu\u015fturur.\n"
@@ -811,14 +812,14 @@ async def admin_dashboard_text():
 
 async def open_admin_panel(message):
     kb = [
-        [InlineKeyboardButton("\u2795 Kanal Ekle", callback_data="admin_add_channel"), InlineKeyboardButton("\U0001f4e6 Paket Ekle", callback_data="admin_add_package")],
-        [InlineKeyboardButton("\U0001f4e2 Kanallar\u0131 Y\u00f6net", callback_data="admin_channels"), InlineKeyboardButton("\U0001f4e6 Paketleri Y\u00f6net", callback_data="admin_packages")],
+        [InlineKeyboardButton("\u2795 Kanal Ekle", callback_data="admin_add_channel")],
+        [InlineKeyboardButton("\U0001f4e2 Kanallar\u0131 Y\u00f6net", callback_data="admin_channels")],
         [InlineKeyboardButton("\U0001f381 Kullan\u0131c\u0131ya VIP Ver", callback_data="admin_grant")],
         [InlineKeyboardButton("\U0001f4ca Son Sat\u0131\u015flar", callback_data="admin_sales"), InlineKeyboardButton("\U0001f4c8 Rapor", callback_data="admin_report")],
         [InlineKeyboardButton("\U0001f4e2 Kanal \u0130statistikleri", callback_data="admin_channel_stats"), InlineKeyboardButton("\U0001f6d2 Yar\u0131m Kalanlar", callback_data="admin_abandoned")],
         [InlineKeyboardButton("\U0001f465 Kullan\u0131c\u0131lar", callback_data="admin_users"), InlineKeyboardButton("\U0001f50d Kullan\u0131c\u0131 Ara", callback_data="admin_search_user")],
         [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
-        [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals"), InlineKeyboardButton("\U0001f389 \u00c7ekili\u015f Paneli", callback_data="admin_giveaway")],
+        [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals")],
         [InlineKeyboardButton("\U0001f4cc Bekleyen \u0130\u015fler", callback_data="admin_pending_work")],
         [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4b8 Reklam Fiyatlari", callback_data="admin_ad_channel_prices")],
         [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances")],
@@ -841,6 +842,8 @@ async def show_vip_channels(message, user_id):
     if not rows:
         await message.reply_text("\U0001f4e2 Hen\u00fcz VIP kanal eklenmedi.")
         return
+
+    await message.reply_text("\U0001f4e2 VIP Kanallar\n\nSat\u0131n almak istedi\u011fin kanal kart\u0131ndaki butona bas. \u00d6deme tamamlan\u0131nca tek kullan\u0131ml\u0131k giri\u015f linkin otomatik gelir.")
 
     for ch in rows:
         base_price = safe_int(ch.get("price"), 0)
@@ -1790,13 +1793,14 @@ async def grant_vip_to_user(message, context, target_user_id, channel_id, custom
 async def show_my_subscriptions(message, user_id):
     rows = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
     if not rows:
-        await message.reply_text(" Aktif uyelik bulunamadi."); return
+        await message.reply_text("\U0001f4c5 Aktif \u00fcyelik bulunamad\u0131."); return
+    await message.reply_text("\U0001f4c5 \u00dcyeli\u011fim\n\nLink yenileme ve iptal talebi sadece a\u015fa\u011f\u0131daki aktif abonelik kartlar\u0131ndan yap\u0131l\u0131r.")
     for sub in rows:
         ch = await get_channel(sub["channel_id"])
         name = ch.get("name") if ch else f"Kanal ID {sub['channel_id']}"
         kb = [
             [InlineKeyboardButton(" Bu uyeligi uzat", callback_data=f"buyc_{sub['channel_id']}")],
-            [InlineKeyboardButton(" Yeni link gonder", callback_data=f"resend_{sub['id']}"), InlineKeyboardButton("Iptal talebi", callback_data=f"request_cancel_{sub['id']}")],
+            [InlineKeyboardButton(" Yeni link gonder", callback_data=f"resend_{sub['id']}"), InlineKeyboardButton("\u274c Iptal talebi", callback_data=f"request_cancel_{sub['id']}")],
         ]
         await message.reply_text(f" Aktif uyeligin:\n\n Kanal: {name}\nBaslangic: {sub.get('start_date')}\nBitis: {sub.get('end_date')}\nDurum: {sub.get('status')}", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -3526,6 +3530,5 @@ app.job_queue.run_repeating(expire_old_subscriptions_job, interval=3600, first=3
 app.job_queue.run_repeating(warning_job, interval=21600, first=60)
 app.job_queue.run_repeating(abandoned_checkout_job, interval=1800, first=300)
 app.job_queue.run_repeating(daily_report_job, interval=86400, first=120)
-app.job_queue.run_repeating(weekly_giveaway_job, interval=86400, first=600)
-print("Pasha VIP V6 bot \u00e7al\u0131\u015f\u0131yor...")
+print("Pasha VIP sade sistem calisiyor...")
 app.run_polling()
