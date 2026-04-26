@@ -1137,6 +1137,7 @@ async def open_admin_panel(message):
         [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
         [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals")],
         [InlineKeyboardButton("\U0001f4cc Bekleyen \u0130\u015fler", callback_data="admin_pending_work")],
+        [InlineKeyboardButton("\U0001f3ac Otomatik Video", callback_data="admin_auto_video")],
         [InlineKeyboardButton("\U0001f916 AI G\u00fcnl\u00fck \u00d6zet", callback_data="admin_ai_summary")],
         [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4b8 Reklam Fiyatlari", callback_data="admin_ad_channel_prices")],
         [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances")],
@@ -1716,6 +1717,43 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             await update.message.reply_text("Reklam goruntulenme sayisi guncellendi.")
 
+        elif mode == "add_auto_video_route":
+            if not can_manage(user_id):
+                context.user_data.clear()
+                await update.message.reply_text("\u274c Yetkin yok.")
+                return
+            parts = [p.strip() for p in raw_text.split("|")]
+            if len(parts) < 2:
+                await update.message.reply_text(
+                    "Format: KaynakChatID | HedefChatID | Not\n\n"
+                    "Ornek:\n"
+                    "-1001111111111 | -1002222222222 | Depo -> Ana Kanal"
+                )
+                return
+            source_chat_id = parts[0]
+            target_chat_id = parts[1]
+            name = parts[2] if len(parts) >= 3 and parts[2] else "Video Aktarma"
+            if not source_chat_id.startswith("-100") or not target_chat_id.startswith("-100"):
+                await update.message.reply_text(
+                    "Chat ID degerleri genelde -100 ile baslar.\n"
+                    "Kaynak ve hedef kanala id yazip dogru ID'leri aldigindan emin ol."
+                )
+                return
+            payload = {
+                "source_chat_id": source_chat_id,
+                "target_chat_id": target_chat_id,
+                "name": name,
+                "active": True,
+                "strip_caption": True,
+            }
+            supabase.table("auto_video_routes").insert(payload).execute()
+            await log_event("auto_video_route_added", user_id, details=str(payload))
+            context.user_data.clear()
+            await update.message.reply_text(
+                "\u2705 Otomatik video aktarma kuruldu.\n\n"
+                "Depo kanalina yeni video attiginda bot ana kanala sadece videoyu yollar. Video altindaki yazi silinir."
+            )
+
         elif mode == "user_coupon":
             code = text.upper()
             coupon = await get_coupon(code)
@@ -1750,6 +1788,114 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error("Text mode hatasi: %s", e)
         context.user_data.clear()
         await update.message.reply_text(" Islem sirasinda hata oldu. Formati kontrol et. Islem modu kapatildi.")
+
+
+# =========================================================
+# AUTO VIDEO TRANSFER
+# =========================================================
+
+async def admin_auto_video_menu(message):
+    rows = supabase.table("auto_video_routes").select("*").order("id", desc=True).execute().data or []
+    kb = [[InlineKeyboardButton("\u2795 Kaynak/Hedef Ekle", callback_data="av_add")]]
+    await message.reply_text(
+        "\U0001f3ac Otomatik Video Aktarma\n\n"
+        "Bu sistem senin Video Depo kanalina attigin yeni videolari ana kanala otomatik yollar.\n"
+        "Depo kanalindaki video altinda yazi olsa bile ana kanala sadece video gider.\n\n"
+        "Kurulum:\n"
+        "1. Botu depo kanalina admin yap.\n"
+        "2. Botu ana kanala admin yap.\n"
+        "3. Iki kanala da duz mesaj olarak id yaz ve Chat ID'leri al.\n"
+        "4. Kaynak/Hedef Ekle butonuyla kaydet.",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+    if not rows:
+        await message.reply_text("HenÃ¼z otomatik video rotasi yok.")
+        return
+    for r in rows:
+        status = "Aktif" if r.get("active") else "Pasif"
+        route_kb = [
+            [
+                InlineKeyboardButton("AÃ§/Kapat", callback_data=f"av_toggle_{r['id']}"),
+                InlineKeyboardButton("Sil", callback_data=f"av_delete_{r['id']}"),
+            ]
+        ]
+        await message.reply_text(
+            f"\U0001f3ac Rota #{r['id']}\n"
+            f"Ad: {r.get('name') or '-'}\n"
+            f"Kaynak: {r.get('source_chat_id')}\n"
+            f"Hedef: {r.get('target_chat_id')}\n"
+            f"Durum: {status}\n"
+            f"Caption: Silinir",
+            reply_markup=InlineKeyboardMarkup(route_kb),
+        )
+
+async def auto_video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    post = update.channel_post
+    if not post or not post.video:
+        return
+
+    source_chat_id = str(post.chat_id)
+    try:
+        routes = (
+            supabase.table("auto_video_routes")
+            .select("*")
+            .eq("source_chat_id", source_chat_id)
+            .eq("active", True)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        logger.error("Auto video route read error: %s", e)
+        return
+
+    if not routes:
+        return
+
+    for route in routes:
+        route_id = route.get("id")
+        target_chat_id = route.get("target_chat_id")
+        try:
+            existing = (
+                supabase.table("auto_video_sent")
+                .select("id")
+                .eq("route_id", route_id)
+                .eq("source_message_id", post.message_id)
+                .execute()
+                .data
+                or []
+            )
+            if existing:
+                continue
+
+            sent = await context.bot.send_video(
+                chat_id=int(target_chat_id),
+                video=post.video.file_id,
+                caption=None,
+                supports_streaming=True,
+            )
+            supabase.table("auto_video_sent").insert(
+                {
+                    "route_id": route_id,
+                    "source_chat_id": source_chat_id,
+                    "source_message_id": post.message_id,
+                    "target_chat_id": str(target_chat_id),
+                    "target_message_id": sent.message_id,
+                    "video_file_id": post.video.file_id,
+                }
+            ).execute()
+            await log_event(
+                "auto_video_sent",
+                actor_id=None,
+                details=f"route_id={route_id}, source={source_chat_id}, target={target_chat_id}, source_msg={post.message_id}",
+            )
+        except Exception as e:
+            logger.error("Auto video send error: %s", e)
+            await log_event(
+                "auto_video_failed",
+                actor_id=None,
+                details=f"route_id={route_id}, source={source_chat_id}, target={target_chat_id}, error={e}",
+            )
 
 # =========================================================
 # CALLBACK ROUTER
@@ -2004,6 +2150,38 @@ async def admin_callback(query, context, data):
         await sales_message(query.message)
     elif data == "admin_report":
         await report_message(query.message)
+    elif data == "admin_auto_video":
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok."); return
+        await admin_auto_video_menu(query.message)
+    elif data == "av_add":
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok."); return
+        context.user_data["mode"] = "add_auto_video_route"
+        await query.message.reply_text(
+            "Kaynak ve hedef Chat ID yaz:\n\n"
+            "KaynakChatID | HedefChatID | Not\n\n"
+            "Ornek:\n"
+            "-1001111111111 | -1002222222222 | Video Depo -> Ana Kanal\n\n"
+            "Kaynak kanal video deposu, hedef kanal ana kanal olacak. Depo kanalindaki caption ana kanala gitmez."
+        )
+    elif data.startswith("av_toggle_"):
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok."); return
+        route_id = int(data.split("_")[2])
+        row = supabase.table("auto_video_routes").select("*").eq("id", route_id).single().execute().data
+        if row:
+            supabase.table("auto_video_routes").update({"active": not bool(row.get("active"))}).eq("id", route_id).execute()
+            await log_event("auto_video_route_toggled", user_id, details=f"route_id={route_id}")
+        await query.message.reply_text("\u2705 Rota durumu degistirildi.")
+        await admin_auto_video_menu(query.message)
+    elif data.startswith("av_delete_"):
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok."); return
+        route_id = int(data.split("_")[2])
+        supabase.table("auto_video_routes").delete().eq("id", route_id).execute()
+        await log_event("auto_video_route_deleted", user_id, details=f"route_id={route_id}")
+        await query.message.reply_text("\u2705 Rota silindi.")
     elif data == "admin_ai_summary":
         await query.message.reply_text("AI genel gunluk ozet hazirlaniyor...")
         summary = await ai_daily_business_summary()
@@ -4185,6 +4363,7 @@ async def weekly_giveaway_job(context: ContextTypes.DEFAULT_TYPE):
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.VIDEO, auto_video_handler))
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.TEXT, channel_id_reader))
 app.add_handler(CallbackQueryHandler(button_router))
 app.add_handler(PreCheckoutQueryHandler(precheckout))
