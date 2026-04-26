@@ -44,79 +44,79 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pasha-v6")
 
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN Railway Variables iÃ§inde yok.")
+    raise ValueError("BOT_TOKEN Railway Variables i\u00e7inde yok.")
 if not SUPABASE_URL:
-    raise ValueError("SUPABASE_URL Railway Variables iÃ§inde yok.")
+    raise ValueError("SUPABASE_URL Railway Variables i\u00e7inde yok.")
 if not SUPABASE_KEY:
-    raise ValueError("SUPABASE_KEY Railway Variables iÃ§inde yok.")
+    raise ValueError("SUPABASE_KEY Railway Variables i\u00e7inde yok.")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["ð¢ VIP Kanallar", "ð¦ Paketler"],
-        ["ð ÃyeliÄim", "ð GeÃ§miÅim"],
-        ["ð Referans", "ð Liderlik"],
-        ["ð ÃekiliÅ", "ðï¸ Kupon Gir"],
-        ["â Ä°ptal Talebi", "â SSS"],
-        ["ð Destek", "â¹ï¸ YardÄ±m"],
+        ["\U0001f4e2 VIP Kanallar", "\U0001f4e6 Paketler"],
+        ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
+        ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
+        ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
+        ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
+        ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
     resize_keyboard=True,
 )
 
 ADMIN_MENU = ReplyKeyboardMarkup(
     [
-        ["ð Admin Panel"],
-        ["ð¢ VIP Kanallar", "ð¦ Paketler"],
-        ["ð ÃyeliÄim", "ð GeÃ§miÅim"],
-        ["ð Referans", "ð Liderlik"],
-        ["ð ÃekiliÅ", "ðï¸ Kupon Gir"],
-        ["â Ä°ptal Talebi", "â SSS"],
-        ["ð Destek", "â¹ï¸ YardÄ±m"],
+        ["\U0001f451 Admin Panel"],
+        ["\U0001f4e2 VIP Kanallar", "\U0001f4e6 Paketler"],
+        ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
+        ["\U0001f381 Referans", "\U0001f3c6 Liderlik"],
+        ["\U0001f389 \u00c7ekili\u015f", "\U0001f39f\ufe0f Kupon Gir"],
+        ["\u274c \u0130ptal Talebi", "\u2753 SSS"],
+        ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
     ],
     resize_keyboard=True,
 )
 
 LABEL_TO_KEY = {
-    "ð Admin Panel": "Admin Panel",
-    "ð¢ VIP Kanallar": "VIP Kanallar",
-    "ð¦ Paketler": "Paketler",
-    "ð ÃyeliÄim": "Uyeligim",
-    "ð Uyeligim": "Uyeligim",
-    "ð GeÃ§miÅim": "Gecmisim",
-    "ð Gecmisim": "Gecmisim",
-    "â Ä°ptal Talebi": "Iptal Talebi",
-    "â Iptal Talebi": "Iptal Talebi",
-    "ð Referans": "Referans",
-    "ð Liderlik": "Liderlik",
-    "ð ÃekiliÅ": "Cekilis",
-    "ð Cekilis": "Cekilis",
-    "ðï¸ Kupon Gir": "Kupon Gir",
-    "ð Kupon Gir": "Kupon Gir",
-    "â SSS": "SSS",
-    "ð Destek": "Destek",
-    "â¹ï¸ YardÄ±m": "Yardim",
-    "â¹ YardÄ±m": "Yardim",
-    "â¹ï¸ Yardim": "Yardim",
-    "â¹ Yardim": "Yardim",
+    "\U0001f451 Admin Panel": "Admin Panel",
+    "\U0001f4e2 VIP Kanallar": "VIP Kanallar",
+    "\U0001f4e6 Paketler": "Paketler",
+    "\U0001f4c5 \u00dcyeli\u011fim": "Uyeligim",
+    "\U0001f4c5 Uyeligim": "Uyeligim",
+    "\U0001f4dc Ge\u00e7mi\u015fim": "Gecmisim",
+    "\U0001f4dc Gecmisim": "Gecmisim",
+    "\u274c \u0130ptal Talebi": "Iptal Talebi",
+    "\u274c Iptal Talebi": "Iptal Talebi",
+    "\U0001f381 Referans": "Referans",
+    "\U0001f3c6 Liderlik": "Liderlik",
+    "\U0001f389 \u00c7ekili\u015f": "Cekilis",
+    "\U0001f389 Cekilis": "Cekilis",
+    "\U0001f39f\ufe0f Kupon Gir": "Kupon Gir",
+    "\U0001f39f Kupon Gir": "Kupon Gir",
+    "\u2753 SSS": "SSS",
+    "\U0001f198 Destek": "Destek",
+    "\u2139\ufe0f Yard\u0131m": "Yardim",
+    "\u2139 Yard\u0131m": "Yardim",
+    "\u2139\ufe0f Yardim": "Yardim",
+    "\u2139 Yardim": "Yardim",
     "Admin Panel": "Admin Panel",
     "VIP Kanallar": "VIP Kanallar",
     "Paketler": "Paketler",
     "Uyeligim": "Uyeligim",
-    "ÃyeliÄim": "Uyeligim",
+    "\u00dcyeli\u011fim": "Uyeligim",
     "Gecmisim": "Gecmisim",
-    "GeÃ§miÅim": "Gecmisim",
+    "Ge\u00e7mi\u015fim": "Gecmisim",
     "Iptal Talebi": "Iptal Talebi",
-    "Ä°ptal Talebi": "Iptal Talebi",
+    "\u0130ptal Talebi": "Iptal Talebi",
     "Referans": "Referans",
     "Liderlik": "Liderlik",
     "Cekilis": "Cekilis",
-    "ÃekiliÅ": "Cekilis",
+    "\u00c7ekili\u015f": "Cekilis",
     "Kupon Gir": "Kupon Gir",
     "SSS": "SSS",
     "Destek": "Destek",
     "Yardim": "Yardim",
-    "YardÄ±m": "Yardim",
+    "Yard\u0131m": "Yardim",
 }
 
 def normalize_menu_text(text: str) -> str:
@@ -124,35 +124,35 @@ def normalize_menu_text(text: str) -> str:
     return LABEL_TO_KEY.get(text, text)
 
 MENU_TEXTS = set(LABEL_TO_KEY.values()) | set(LABEL_TO_KEY.keys())
-CANCEL_TEXTS = {"iptal", "Ä°ptal", "cancel", "Cancel", "vazgeÃ§", "vazgec", "geri", "menÃ¼", "menu"}
+CANCEL_TEXTS = {"iptal", "\u0130ptal", "cancel", "Cancel", "vazge\u00e7", "vazgec", "geri", "men\u00fc", "menu"}
 DEFAULT_GROUP_FAQS = [
     (
-        "Botu VIP gruba/kanala nasÄ±l baÄlarÄ±m?",
-        "Botu VIP grup veya kanala yÃ¶netici olarak ekle. Mesaj gÃ¶nder, kullanÄ±cÄ± davet et ve kullanÄ±cÄ± yasakla yetkilerini aÃ§. Sonra grup/kanal iÃ§ine dÃ¼z mesaj olarak id yaz; bot -100 ile baÅlayan Chat ID verir.",
+        "Botu VIP gruba/kanala nas\u0131l ba\u011flar\u0131m?",
+        "Botu VIP grup veya kanala y\u00f6netici olarak ekle. Mesaj g\u00f6nder, kullan\u0131c\u0131 davet et ve kullan\u0131c\u0131 yasakla yetkilerini a\u00e7. Sonra grup/kanal i\u00e7ine d\u00fcz mesaj olarak id yaz; bot -100 ile ba\u015flayan Chat ID verir.",
     ),
     (
-        "Kanal ID ile grup ID aynÄ± mÄ±?",
-        "Ä°kisi de Chat ID olarak kullanÄ±lÄ±r. Telegram sÃ¼per gruplar ve kanallar genelde -100 ile baÅlayan ID verir. Bot VIP link Ã¼retirken bu ID'yi kullanÄ±r.",
+        "Kanal ID ile grup ID ayn\u0131 m\u0131?",
+        "\u0130kisi de Chat ID olarak kullan\u0131l\u0131r. Telegram s\u00fcper gruplar ve kanallar genelde -100 ile ba\u015flayan ID verir. Bot VIP link \u00fcretirken bu ID'yi kullan\u0131r.",
     ),
     (
-        "Bot kullanÄ±cÄ±yÄ± gruba direkt ekleyebilir mi?",
-        "HayÄ±r. Telegram botlarÄ± kullanÄ±cÄ±yÄ± zorla gruba/kanala ekleyemez. Bot tek kullanÄ±mlÄ±k davet linki Ã¼retir; kullanÄ±cÄ± linke basÄ±p katÄ±lÄ±r.",
+        "Bot kullan\u0131c\u0131y\u0131 gruba direkt ekleyebilir mi?",
+        "Hay\u0131r. Telegram botlar\u0131 kullan\u0131c\u0131y\u0131 zorla gruba/kanala ekleyemez. Bot tek kullan\u0131ml\u0131k davet linki \u00fcretir; kullan\u0131c\u0131 linke bas\u0131p kat\u0131l\u0131r.",
     ),
     (
-        "Davet linki Ã§alÄ±ÅmÄ±yor, ne yapmalÄ±yÄ±m?",
-        "ÃyeliÄim bÃ¶lÃ¼mÃ¼nden Yeni link gÃ¶nder butonuna bas. Link yine oluÅmuyorsa bot VIP grupta/kanalda admin deÄildir veya kullanÄ±cÄ± davet et yetkisi kapalÄ±dÄ±r.",
+        "Davet linki \u00e7al\u0131\u015fm\u0131yor, ne yapmal\u0131y\u0131m?",
+        "\u00dcyeli\u011fim b\u00f6l\u00fcm\u00fcnden Yeni link g\u00f6nder butonuna bas. Link yine olu\u015fmuyorsa bot VIP grupta/kanalda admin de\u011fildir veya kullan\u0131c\u0131 davet et yetkisi kapal\u0131d\u0131r.",
     ),
     (
-        "VIP grup mu kanal mÄ± kullanmalÄ±yÄ±m?",
-        "Sadece iÃ§erik yayÄ±nlayacaksan kanal daha temizdir. Ãyelerin konuÅmasÄ±nÄ± istiyorsan grup kullan. SatÄ±Å ve Ã¼yelik sistemi ikisinde de Ã§alÄ±ÅÄ±r.",
+        "VIP grup mu kanal m\u0131 kullanmal\u0131y\u0131m?",
+        "Sadece i\u00e7erik yay\u0131nlayacaksan kanal daha temizdir. \u00dcyelerin konu\u015fmas\u0131n\u0131 istiyorsan grup kullan. Sat\u0131\u015f ve \u00fcyelik sistemi ikisinde de \u00e7al\u0131\u015f\u0131r.",
     ),
     (
-        "Grup gizli mi olmalÄ±?",
-        "Evet. VIP eriÅim satÄ±yorsan grup/kanal gizli olmalÄ±. KullanÄ±cÄ±lar sadece botun Ã¼rettiÄi tek kullanÄ±mlÄ±k linkle girmeli.",
+        "Grup gizli mi olmal\u0131?",
+        "Evet. VIP eri\u015fim sat\u0131yorsan grup/kanal gizli olmal\u0131. Kullan\u0131c\u0131lar sadece botun \u00fcretti\u011fi tek kullan\u0131ml\u0131k linkle girmeli.",
     ),
 ]
 
-BAD_TEXT_MARKERS = ("Ã", "Ã", "Ã", "Ã°", "ï¿½")
+BAD_TEXT_MARKERS = ("\u00c3", "\u00c4", "\u00c5", "\u00f0", "\ufffd")
 
 def is_bad_text(value) -> bool:
     return any(marker in str(value or "") for marker in BAD_TEXT_MARKERS)
@@ -354,7 +354,7 @@ async def ensure_defaults_once(context: ContextTypes.DEFAULT_TYPE = None):
             if not existing.data:
                 supabase.table("faq").insert({"question": q, "answer": a, "active": True}).execute()
     except Exception as e:
-        logger.warning("VarsayÄ±lan SSS eklenemedi: %s", e)
+        logger.warning("Varsay\u0131lan SSS eklenemedi: %s", e)
 
 # =========================================================
 # DB ACCESS
@@ -493,7 +493,7 @@ async def remove_user_from_channel(context, ch, user_id):
 # =========================================================
 
 async def show_terms(message):
-    kb = [[InlineKeyboardButton("â Kabul Ediyorum", callback_data="accept_terms")]]
+    kb = [[InlineKeyboardButton("\u2705 Kabul Ediyorum", callback_data="accept_terms")]]
     await message.reply_text(
         " Kurallar ve Kullanim Onayi\n\n"
         "Bu bot uzerinden verilen VIP erisimler yalnizca yasal, rizaya dayali ve kurallara uygun icerikler icindir.\n\n"
@@ -519,13 +519,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     referrer_id = extract_referrer(context.args)
     await save_user(user, referrer_id=referrer_id)
     if await is_blacklisted(user.id) and not is_admin(user.id):
-        await update.message.reply_text("ð« Bu botu kullanma yetkin kÄ±sÄ±tlandÄ±.")
+        await update.message.reply_text("\U0001f6ab Bu botu kullanma yetkin k\u0131s\u0131tland\u0131.")
         return
     if not is_admin(user.id) and not await user_accepted_terms(user.id):
         await show_terms(update.message)
         return
     await update.message.reply_text(
-        "ð Pasha VIP admin sistemine hoÅ geldin." if is_admin(user.id) else "ð Pasha VIP sistemine hoÅ geldin.",
+        "\U0001f44b Pasha VIP admin sistemine ho\u015f geldin." if is_admin(user.id) else "\U0001f44b Pasha VIP sistemine ho\u015f geldin.",
         reply_markup=ADMIN_MENU if is_admin(user.id) else MAIN_MENU,
     )
 
@@ -551,14 +551,14 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         if raw_text.lower() in {x.lower() for x in CANCEL_TEXTS}:
             await update.message.reply_text(
-                "â Ä°Ålem iptal edildi. MenÃ¼den tekrar seÃ§im yapabilirsin.",
+                "\u2705 \u0130\u015flem iptal edildi. Men\u00fcden tekrar se\u00e7im yapabilirsin.",
                 reply_markup=ADMIN_MENU if is_admin(user_id) else MAIN_MENU,
             )
             return
         # Continue with the selected menu instead of treating it as form input.
 
     if await is_blacklisted(user_id) and not is_admin(user_id):
-        await update.message.reply_text("ð« Bu botu kullanma yetkin kÄ±sÄ±tlandÄ±.")
+        await update.message.reply_text("\U0001f6ab Bu botu kullanma yetkin k\u0131s\u0131tland\u0131.")
         return
     if not is_admin(user_id) and not await user_accepted_terms(user_id):
         await show_terms(update.message)
@@ -567,7 +567,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_text_mode(update, context)
         return
     if maintenance_on() and not is_admin(user_id):
-        await update.message.reply_text("ð§ Bot bakÄ±m modunda. LÃ¼tfen daha sonra tekrar dene.")
+        await update.message.reply_text("\U0001f527 Bot bak\u0131m modunda. L\u00fctfen daha sonra tekrar dene.")
         return
 
     if is_admin(user_id) and text == "Admin Panel":
@@ -590,7 +590,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await create_cancel_request(update, context)
     elif text == "Kupon Gir":
         context.user_data["mode"] = "user_coupon"
-        await update.message.reply_text("ðï¸ Kupon kodunu yaz:")
+        await update.message.reply_text("\U0001f39f\ufe0f Kupon kodunu yaz:")
     elif text == "Destek":
         await support_menu(update.message)
     elif text == "SSS":
@@ -598,19 +598,19 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "Yardim":
         await help_message(update.message)
     else:
-        await update.message.reply_text("MenÃ¼den bir seÃ§enek seÃ§ebilirsin.")
+        await update.message.reply_text("Men\u00fcden bir se\u00e7enek se\u00e7ebilirsin.")
 
 
 async def help_message(message):
     await message.reply_text(
-        "â¹ï¸ YardÄ±m\n\n"
-        "ð¢ VIP Kanallar: SatÄ±n alÄ±nabilir kanallarÄ± gÃ¶sterir.\n"
-        "ð¦ Paketler: Birden fazla kanalÄ± avantajlÄ± paketle verir.\n"
-        "ð ÃyeliÄim: Aktif Ã¼yeliklerini ve link yenilemeyi gÃ¶sterir.\n"
-        "ð Referans: ArkadaÅ getirip puan kazanÄ±rsÄ±n.\n"
-        "ð Liderlik: En Ã§ok davet yapanlarÄ± gÃ¶sterir.\n"
-        "â SSS: Grup/kanal ve Ã¶deme sorunlarÄ± iÃ§in hazÄ±r cevaplar.\n"
-        "ð Destek: Admin'e destek talebi gÃ¶nderir."
+        "\u2139\ufe0f Yard\u0131m\n\n"
+        "\U0001f4e2 VIP Kanallar: Sat\u0131n al\u0131nabilir kanallar\u0131 g\u00f6sterir.\n"
+        "\U0001f4e6 Paketler: Birden fazla kanal\u0131 avantajl\u0131 paketle verir.\n"
+        "\U0001f4c5 \u00dcyeli\u011fim: Aktif \u00fcyeliklerini ve link yenilemeyi g\u00f6sterir.\n"
+        "\U0001f381 Referans: Arkada\u015f getirip puan kazan\u0131rs\u0131n.\n"
+        "\U0001f3c6 Liderlik: En \u00e7ok davet yapanlar\u0131 g\u00f6sterir.\n"
+        "\u2753 SSS: Grup/kanal ve \u00f6deme sorunlar\u0131 i\u00e7in haz\u0131r cevaplar.\n"
+        "\U0001f198 Destek: Admin'e destek talebi g\u00f6nderir."
     )
 
 # =========================================================
@@ -643,33 +643,33 @@ async def admin_dashboard_text():
         if end and end.date() == now_utc().date():
             expiring_today += 1
     return (
-        "ð Admin Panel\n\n"
-        f"ð BugÃ¼n: {today_count} satÄ±Å / {today_stars} Stars\n"
-        f"ð Bu ay: {month_count} satÄ±Å / {month_stars} Stars\n"
-        f"ð¥ Aktif Ã¼ye: {len(active_subs)}\n"
-        f"ð YarÄ±m kalan Ã¶deme: {len(abandoned)}\n"
-        f"â³ BugÃ¼n bitecek Ã¼yelik: {expiring_today}\n"
-        f"ð AÃ§Ä±k destek: {len(supports)}\n"
-        f"ð« Kara liste: {len(blacklisted)}\n"
-        f"ð§ BakÄ±m modu: {'AÃIK' if maintenance_on() else 'KAPALI'}"
+        "\U0001f451 Admin Panel\n\n"
+        f"\U0001f4ca Bug\u00fcn: {today_count} sat\u0131\u015f / {today_stars} Stars\n"
+        f"\U0001f4c6 Bu ay: {month_count} sat\u0131\u015f / {month_stars} Stars\n"
+        f"\U0001f465 Aktif \u00fcye: {len(active_subs)}\n"
+        f"\U0001f6d2 Yar\u0131m kalan \u00f6deme: {len(abandoned)}\n"
+        f"\u23f3 Bug\u00fcn bitecek \u00fcyelik: {expiring_today}\n"
+        f"\U0001f198 A\u00e7\u0131k destek: {len(supports)}\n"
+        f"\U0001f6ab Kara liste: {len(blacklisted)}\n"
+        f"\U0001f527 Bak\u0131m modu: {'A\u00c7IK' if maintenance_on() else 'KAPALI'}"
     )
 
 
 async def open_admin_panel(message):
     kb = [
-        [InlineKeyboardButton("â Kanal Ekle", callback_data="admin_add_channel"), InlineKeyboardButton("ð¦ Paket Ekle", callback_data="admin_add_package")],
-        [InlineKeyboardButton("ð¢ KanallarÄ± YÃ¶net", callback_data="admin_channels"), InlineKeyboardButton("ð¦ Paketleri YÃ¶net", callback_data="admin_packages")],
-        [InlineKeyboardButton("ð KullanÄ±cÄ±ya VIP Ver", callback_data="admin_grant")],
-        [InlineKeyboardButton("ð Son SatÄ±Ålar", callback_data="admin_sales"), InlineKeyboardButton("ð Rapor", callback_data="admin_report")],
-        [InlineKeyboardButton("ð¢ Kanal Ä°statistikleri", callback_data="admin_channel_stats"), InlineKeyboardButton("ð YarÄ±m Kalanlar", callback_data="admin_abandoned")],
-        [InlineKeyboardButton("ð¥ KullanÄ±cÄ±lar", callback_data="admin_users"), InlineKeyboardButton("ð KullanÄ±cÄ± Ara", callback_data="admin_search_user")],
-        [InlineKeyboardButton("ðï¸ Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("ð¥ Kampanya", callback_data="admin_campaign")],
-        [InlineKeyboardButton("ð Referans Paneli", callback_data="admin_referrals"), InlineKeyboardButton("ð ÃekiliÅ Paneli", callback_data="admin_giveaway")],
-        [InlineKeyboardButton("â SSS YÃ¶net", callback_data="admin_faq"), InlineKeyboardButton("ð Destek Talepleri", callback_data="admin_support")],
-        [InlineKeyboardButton("â Ä°ptal Talepleri", callback_data="admin_cancel"), InlineKeyboardButton("ð« Kara Liste", callback_data="admin_blacklist")],
-        [InlineKeyboardButton("ð® Adminler", callback_data="admin_admins"), InlineKeyboardButton("ð Ä°Ålem LoglarÄ±", callback_data="admin_logs")],
-        [InlineKeyboardButton("ð SatÄ±Å CSV", callback_data="admin_export_sales"), InlineKeyboardButton("ð Grup/Kanal ID YardÄ±mÄ±", callback_data="admin_channel_id_help")],
-        [InlineKeyboardButton("ð§ BakÄ±m AÃ§/Kapat", callback_data="admin_maintenance")],
+        [InlineKeyboardButton("\u2795 Kanal Ekle", callback_data="admin_add_channel"), InlineKeyboardButton("\U0001f4e6 Paket Ekle", callback_data="admin_add_package")],
+        [InlineKeyboardButton("\U0001f4e2 Kanallar\u0131 Y\u00f6net", callback_data="admin_channels"), InlineKeyboardButton("\U0001f4e6 Paketleri Y\u00f6net", callback_data="admin_packages")],
+        [InlineKeyboardButton("\U0001f381 Kullan\u0131c\u0131ya VIP Ver", callback_data="admin_grant")],
+        [InlineKeyboardButton("\U0001f4ca Son Sat\u0131\u015flar", callback_data="admin_sales"), InlineKeyboardButton("\U0001f4c8 Rapor", callback_data="admin_report")],
+        [InlineKeyboardButton("\U0001f4e2 Kanal \u0130statistikleri", callback_data="admin_channel_stats"), InlineKeyboardButton("\U0001f6d2 Yar\u0131m Kalanlar", callback_data="admin_abandoned")],
+        [InlineKeyboardButton("\U0001f465 Kullan\u0131c\u0131lar", callback_data="admin_users"), InlineKeyboardButton("\U0001f50d Kullan\u0131c\u0131 Ara", callback_data="admin_search_user")],
+        [InlineKeyboardButton("\U0001f39f\ufe0f Kuponlar", callback_data="admin_coupons"), InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
+        [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals"), InlineKeyboardButton("\U0001f389 \u00c7ekili\u015f Paneli", callback_data="admin_giveaway")],
+        [InlineKeyboardButton("\u2753 SSS Y\u00f6net", callback_data="admin_faq"), InlineKeyboardButton("\U0001f198 Destek Talepleri", callback_data="admin_support")],
+        [InlineKeyboardButton("\u274c \u0130ptal Talepleri", callback_data="admin_cancel"), InlineKeyboardButton("\U0001f6ab Kara Liste", callback_data="admin_blacklist")],
+        [InlineKeyboardButton("\U0001f46e Adminler", callback_data="admin_admins"), InlineKeyboardButton("\U0001f4dc \u0130\u015flem Loglar\u0131", callback_data="admin_logs")],
+        [InlineKeyboardButton("\U0001f4c4 Sat\u0131\u015f CSV", callback_data="admin_export_sales"), InlineKeyboardButton("\U0001f194 Grup/Kanal ID Yard\u0131m\u0131", callback_data="admin_channel_id_help")],
+        [InlineKeyboardButton("\U0001f527 Bak\u0131m A\u00e7/Kapat", callback_data="admin_maintenance")],
     ]
     await message.reply_text(await admin_dashboard_text(), reply_markup=InlineKeyboardMarkup(kb))
 
@@ -680,26 +680,26 @@ async def open_admin_panel(message):
 async def show_vip_channels(message, user_id):
     rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
     if not rows:
-        await message.reply_text("ð¢ HenÃ¼z VIP kanal eklenmedi.")
+        await message.reply_text("\U0001f4e2 Hen\u00fcz VIP kanal eklenmedi.")
         return
     for ch in rows:
         base_price = safe_int(ch.get("price"), 0)
         final_price, coupon_code, discount_text = await calculate_price(user_id, base_price, ch.get("id"))
         variant = ab_variant(user_id)
-        title = "ð¥ BugÃ¼ne Ã¶zel VIP eriÅim" if variant == "B" else "ð¢ VIP Kanal"
-        campaign_line = f"\nð¥ Kampanya indirimi: %{campaign_percent()}" if campaign_percent() else ""
-        coupon_line = f"\nðï¸ Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
+        title = "\U0001f525 Bug\u00fcne \u00f6zel VIP eri\u015fim" if variant == "B" else "\U0001f4e2 VIP Kanal"
+        campaign_line = f"\n\U0001f525 Kampanya indirimi: %{campaign_percent()}" if campaign_percent() else ""
+        coupon_line = f"\n\U0001f39f\ufe0f Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
         text = (
             f"{title}\n\n"
-            f"ð¢ {ch.get('name')}\n"
-            f"â­ Fiyat: {base_price} Stars\n"
-            f"â Ãdenecek: {final_price} Stars\n"
-            f"â³ SÃ¼re: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} gÃ¼n"
+            f"\U0001f4e2 {ch.get('name')}\n"
+            f"\u2b50 Fiyat: {base_price} Stars\n"
+            f"\u2705 \u00d6denecek: {final_price} Stars\n"
+            f"\u23f3 S\u00fcre: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} g\u00fcn"
             f"{campaign_line}{coupon_line}"
         )
         kb = [
-            [InlineKeyboardButton("ðï¸ Ãnizleme", callback_data=f"preview_channel_{ch['id']}")],
-            [InlineKeyboardButton(f"â­ {final_price} Stars ile SatÄ±n Al", callback_data=f"buyc_{ch['id']}")],
+            [InlineKeyboardButton("\U0001f441\ufe0f \u00d6nizleme", callback_data=f"preview_channel_{ch['id']}")],
+            [InlineKeyboardButton(f"\u2b50 {final_price} Stars ile Sat\u0131n Al", callback_data=f"buyc_{ch['id']}")],
         ]
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -710,12 +710,12 @@ async def show_channel_preview(message, channel_id, user_id):
         await message.reply_text(" Kanal bulunamadi.")
         return
     final_price, coupon_code, discount_text = await calculate_price(user_id, safe_int(ch.get("price"), 0), channel_id)
-    coupon_line = f"\nðï¸ Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
+    coupon_line = f"\n\U0001f39f\ufe0f Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
     text = (
         " Kanal Onizleme\n\n"
-        f"ð¢ {ch.get('name')}\n"
+        f"\U0001f4e2 {ch.get('name')}\n"
         f" Fiyat: {ch.get('price')} Stars\n"
-        f"â Ãdenecek: {final_price} Stars\n"
+        f"\u2705 \u00d6denecek: {final_price} Stars\n"
         f" Sure: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} gun\n"
         f" {ch.get('description') or 'Aciklama yok.'}\n\n"
         " Odeme Telegram Stars ile yapilir\n"
@@ -724,7 +724,7 @@ async def show_channel_preview(message, channel_id, user_id):
         " Sorun olursa destek acabilirsin"
         f"{coupon_line}"
     )
-    kb = [[InlineKeyboardButton(f"â­ {final_price} Stars ile SatÄ±n Al", callback_data=f"buyc_{channel_id}")]]
+    kb = [[InlineKeyboardButton(f"\u2b50 {final_price} Stars ile Sat\u0131n Al", callback_data=f"buyc_{channel_id}")]]
     if ch.get("photo_url"):
         try:
             await message.reply_photo(ch["photo_url"], caption=text, reply_markup=InlineKeyboardMarkup(kb))
@@ -742,11 +742,11 @@ async def show_packages(message, user_id):
     for p in rows:
         base_price = safe_int(p.get("price"), 0)
         final_price, coupon_code, discount_text = await calculate_price(user_id, base_price, None)
-        coupon_line = f"\nðï¸ Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
+        coupon_line = f"\n\U0001f39f\ufe0f Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
         text = (
             f" {p.get('name')}\n"
-            f"â­ Fiyat: {base_price} Stars\n"
-            f"â Ãdenecek: {final_price} Stars\n"
+            f"\u2b50 Fiyat: {base_price} Stars\n"
+            f"\u2705 \u00d6denecek: {final_price} Stars\n"
             f" Sure: {p.get('duration_days') or DEFAULT_DURATION_DAYS} gun\n"
             f" {p.get('description') or ''}"
             f"{coupon_line}"
@@ -953,7 +953,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "accept_terms":
         supabase.table("users").update({"accepted_terms": True}).eq("user_id", user_id).execute()
-        await query.message.reply_text("â KurallarÄ± kabul ettin. MenÃ¼den devam edebilirsin.", reply_markup=MAIN_MENU)
+        await query.message.reply_text("\u2705 Kurallar\u0131 kabul ettin. Men\u00fcden devam edebilirsin.", reply_markup=MAIN_MENU)
         return
 
     # public callbacks
@@ -1609,25 +1609,25 @@ async def faq_user_message(message):
     rows = supabase.table("faq").select("*").eq("active", True).order("id").execute().data or []
     rows = clean_faq_rows(rows)
     if not rows:
-        await message.reply_text("â HenÃ¼z SSS eklenmedi."); return
+        await message.reply_text("\u2753 Hen\u00fcz SSS eklenmedi."); return
     kb = [[InlineKeyboardButton(row.get("question") or f"SSS {row['id']}", callback_data=f"faq_view_{row['id']}")] for row in rows[:40]]
-    await message.reply_text("â SÄ±k Sorulan Sorular", reply_markup=InlineKeyboardMarkup(kb))
+    await message.reply_text("\u2753 S\u0131k Sorulan Sorular", reply_markup=InlineKeyboardMarkup(kb))
 
 
 async def faq_answer(message, faq_id):
     row = supabase.table("faq").select("*").eq("id", faq_id).single().execute().data
     if not row or is_bad_text(row.get("question")) or is_bad_text(row.get("answer")):
-        await message.reply_text("â SSS bulunamadÄ±."); return
-    await message.reply_text(f"â {row.get('question')}\n\n{row.get('answer')}")
+        await message.reply_text("\u274c SSS bulunamad\u0131."); return
+    await message.reply_text(f"\u2753 {row.get('question')}\n\n{row.get('answer')}")
 
 
 async def faq_admin_message(message):
     rows = supabase.table("faq").select("*").order("id", desc=True).execute().data or []
     rows = clean_faq_rows(rows)
-    await message.reply_text("â SSS YÃ¶netimi", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("â SSS Ekle", callback_data="faq_add")]]))
+    await message.reply_text("\u2753 SSS Y\u00f6netimi", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("\u2795 SSS Ekle", callback_data="faq_add")]]))
     for row in rows[:30]:
-        status = "Aktif â" if row.get("active") else "Pasif â"
-        await message.reply_text(f"ID: {row['id']}\nSoru: {row.get('question')}\nDurum: {status}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("AÃ§/Kapat", callback_data=f"faq_toggle_{row['id']}")]]))
+        status = "Aktif \u2705" if row.get("active") else "Pasif \u26d4"
+        await message.reply_text(f"ID: {row['id']}\nSoru: {row.get('question')}\nDurum: {status}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("A\u00e7/Kapat", callback_data=f"faq_toggle_{row['id']}")]]))
 
 
 async def create_cancel_request(update, context):
@@ -1777,7 +1777,7 @@ async def abandoned_message(message):
 
 async def coupons_message(message):
     rows = supabase.table("coupons").select("*").order("id", desc=True).execute().data or []
-    await message.reply_text("ðï¸ Kuponlar", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Kupon Olustur", callback_data="coupon_add")]]))
+    await message.reply_text("\U0001f39f\ufe0f Kuponlar", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Kupon Olustur", callback_data="coupon_add")]]))
     if not rows:
         await message.reply_text("Henuz kupon yok."); return
     for c in rows[:30]:
@@ -1819,7 +1819,7 @@ async def blacklist_message(message):
 
 async def admins_message(message):
     rows = supabase.table("admins").select("*").order("id", desc=True).execute().data or []
-    await message.reply_text("ð® Adminler", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Admin Ekle", callback_data="admin_add_admin")]]))
+    await message.reply_text("\U0001f46e Adminler", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Admin Ekle", callback_data="admin_add_admin")]]))
     await message.reply_text(f"Owner: {OWNER_ID}")
     for a in rows:
         status = "Aktif " if a.get("active") else "Pasif "
@@ -1846,7 +1846,7 @@ async def export_sales_csv(message):
         writer.writerow({k: r.get(k) for k in fieldnames})
     file_data = io.BytesIO(output.getvalue().encode("utf-8"))
     file_data.name = "sales.csv"
-    await message.reply_document(document=file_data, filename="sales.csv", caption="ð SatÄ±Å CSV")
+    await message.reply_document(document=file_data, filename="sales.csv", caption="\U0001f4c4 Sat\u0131\u015f CSV")
 
 # =========================================================
 # ADMIN ACTIONS
@@ -2056,5 +2056,5 @@ app.job_queue.run_repeating(warning_job, interval=21600, first=60)
 app.job_queue.run_repeating(abandoned_checkout_job, interval=1800, first=300)
 app.job_queue.run_repeating(daily_report_job, interval=86400, first=120)
 app.job_queue.run_repeating(weekly_giveaway_job, interval=86400, first=600)
-print("Pasha VIP V6 bot Ã§alÄ±ÅÄ±yor...")
+print("Pasha VIP V6 bot \u00e7al\u0131\u015f\u0131yor...")
 app.run_polling()
