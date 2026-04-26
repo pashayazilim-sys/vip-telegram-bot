@@ -45,6 +45,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 DEFAULT_DURATION_DAYS = 30
 INVITE_LINK_EXPIRE_MINUTES = 30
+MAX_USER_LINK_RESENDS = 2
 BROADCAST_DELAY_SECONDS = 0.05
 ABANDONED_REMINDER_HOURS = 2
 
@@ -123,7 +124,7 @@ LABEL_TO_KEY = {
     "\u2139 Yardim": "Yardim",
     "Admin Panel": "Admin Panel",
     "Hizli Basla": "Hizli Basla",
-    "HÄ±zlÄ± BaÅla": "Hizli Basla",
+    "H\u0131zl\u0131 Ba\u015fla": "Hizli Basla",
     "Durumum": "Durumum",
     "VIP Kanallar": "VIP Kanallar",
     "Paketler": "Paketler",
@@ -1182,44 +1183,88 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await search_user(update.message, text)
             context.user_data.clear()
 
+        elif mode == "admin_add_balance_amount":
+            if not can_manage(user_id):
+                context.user_data.clear()
+                await update.message.reply_text("\u274c Yetkin yok.")
+                return
+
+            target_id = int(context.user_data.get("target_user_id"))
+            amount_text = raw_text.replace(" ", "").strip()
+
+            if not amount_text.isdigit():
+                await update.message.reply_text("\u274c Sadece tutar yaz. \xd6rnek: 2500")
+                return
+
+            amount = int(amount_text)
+            if amount < 1:
+                await update.message.reply_text("\u274c Tutar en az 1 Stars olmal\u0131.")
+                return
+            if amount > 1000000:
+                await update.message.reply_text("\u274c Tek seferde en fazla 1.000.000 Stars eklenebilir.")
+                return
+
+            note = "Admin kullan\u0131c\u0131 detay\u0131ndan manuel bakiye ekledi"
+            ok = await change_ad_balance(target_id, amount, "admin_add", note)
+            if not ok:
+                await update.message.reply_text("\u274c Bakiye eklenemedi. ad_balances/ad_transactions tablolar\u0131n\u0131 kontrol et.")
+                return
+
+            new_balance = await get_ad_balance(target_id)
+            await log_event("admin_added_ad_balance", user_id, target_user_id=target_id, details=f"+{amount} Stars | user detail")
+            context.user_data.clear()
+            await update.message.reply_text(
+                f"\u2705 Bakiye eklendi.\n\n"
+                f"Kullan\u0131c\u0131 ID: {target_id}\n"
+                f"Eklenen: {amount} Stars\n"
+                f"G\xfcncel bakiye: {new_balance} Stars"
+            )
+            try:
+                await context.bot.send_message(
+                    target_id,
+                    f"\U0001f4b0 Reklam bakiyene admin taraf\u0131ndan {amount} Stars eklendi.\nG\xfcncel bakiyen: {new_balance} Stars"
+                )
+            except Exception:
+                pass
+
         elif mode == "admin_add_user_balance":
             if not can_manage(user_id):
                 context.user_data.clear()
-                await update.message.reply_text("â Yetkin yok.")
+                await update.message.reply_text("\u274c Yetkin yok.")
                 return
 
             parts = [p.strip() for p in raw_text.split("|")]
             if len(parts) < 2:
-                await update.message.reply_text("â Format: UserID | Tutar | Not\n\nÃrnek:\n957422314 | 2500 | manuel reklam bakiyesi")
+                await update.message.reply_text("\u274c Format: UserID | Tutar | Not\n\n\xd6rnek:\n957422314 | 2500 | manuel reklam bakiyesi")
                 return
 
             target_id_text = parts[0].replace("@", "").strip()
             amount_text = parts[1].replace(" ", "").strip()
             if not target_id_text.isdigit() or not amount_text.isdigit():
-                await update.message.reply_text("â UserID ve tutar sadece rakam olmalÄ±. Ãrnek: 957422314 | 2500")
+                await update.message.reply_text("\u274c UserID ve tutar sadece rakam olmal\u0131. \xd6rnek: 957422314 | 2500")
                 return
 
             target_id = int(target_id_text)
             amount = int(amount_text)
-            note = parts[2] if len(parts) >= 3 and parts[2] else "Admin manuel bakiye yÃ¼kledi"
+            note = parts[2] if len(parts) >= 3 and parts[2] else "Admin manuel bakiye y\xfckledi"
             if amount < 1:
-                await update.message.reply_text("â Tutar en az 1 Stars olmalÄ±.")
+                await update.message.reply_text("\u274c Tutar en az 1 Stars olmal\u0131.")
                 return
             if amount > 1000000:
-                await update.message.reply_text("â Tek seferde en fazla 1.000.000 Stars eklenebilir.")
+                await update.message.reply_text("\u274c Tek seferde en fazla 1.000.000 Stars eklenebilir.")
                 return
 
             ok = await change_ad_balance(target_id, amount, "admin_add", note)
             if not ok:
-                await update.message.reply_text("â Bakiye eklenemedi. ad_balances/ad_transactions tablolarÄ±nÄ± kontrol et.")
+                await update.message.reply_text("\u274c Bakiye eklenemedi. ad_balances/ad_transactions tablolar\u0131n\u0131 kontrol et.")
                 return
 
             new_balance = await get_ad_balance(target_id)
             await log_event("admin_added_ad_balance", user_id, target_user_id=target_id, details=f"+{amount} Stars | {note}")
             context.user_data.clear()
-            await update.message.reply_text(f"â Bakiye eklendi.\n\nKullanÄ±cÄ± ID: {target_id}\nEklenen: {amount} Stars\nGÃ¼ncel bakiye: {new_balance} Stars")
+            await update.message.reply_text(f"\u2705 Bakiye eklendi.\n\nKullan\u0131c\u0131 ID: {target_id}\nEklenen: {amount} Stars\nG\xfcncel bakiye: {new_balance} Stars")
             try:
-                await context.bot.send_message(target_id, f"ð° Reklam bakiyene admin tarafÄ±ndan {amount} Stars eklendi.\nGÃ¼ncel bakiyen: {new_balance} Stars")
+                await context.bot.send_message(target_id, f"\U0001f4b0 Reklam bakiyene admin taraf\u0131ndan {amount} Stars eklendi.\nG\xfcncel bakiyen: {new_balance} Stars")
             except Exception:
                 pass
 
@@ -1300,7 +1345,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("Yeniden Yazdir", callback_data="ad_ai_retry"), InlineKeyboardButton("Iptal", callback_data="ad_cancel")],
                 ]
                 await update.message.reply_text(
-                    f"â¨ AI reklam onerisi\n\n"
+                    f"\u2728 AI reklam onerisi\n\n"
                     f"Baslik: {title}\n\n"
                     f"Metin:\n{body}\n\n"
                     f"Link: {clean_link}",
@@ -1322,7 +1367,7 @@ async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.clear()
                 kb = [[InlineKeyboardButton("Admin ile Konus", callback_data="support_auto_admin")]]
                 await update.message.reply_text(
-                    f"ð¤ AI Destek Cevabi\n\n{answer}\n\n"
+                    f"\U0001f916 AI Destek Cevabi\n\n{answer}\n\n"
                     "Sorun cozulmediyse Admin ile Konus butonuna bas.",
                     reply_markup=InlineKeyboardMarkup(kb),
                 )
@@ -1789,15 +1834,15 @@ async def admin_callback(query, context, data):
         await query.message.reply_text("Reklam paketi sistemi kapatildi. Kullanici direkt kanal seciyor; fiyatlari Reklam Fiyatlari ekranindan kanal bazli ayarla.")
     elif data == "admin_add_user_balance":
         if not can_manage(user_id):
-            await query.message.reply_text("â Yetkin yok."); return
+            await query.message.reply_text("\u274c Yetkin yok."); return
         context.user_data["mode"] = "admin_add_user_balance"
         await query.message.reply_text(
-            "ð° KullanÄ±cÄ±ya bakiye yÃ¼kle\n\n"
+            "\U0001f4b0 Kullan\u0131c\u0131ya bakiye y\xfckle\n\n"
             "Format:\n"
             "UserID | Tutar | Not\n\n"
-            "Ãrnek:\n"
+            "\xd6rnek:\n"
             "957422314 | 2500 | manuel reklam bakiyesi\n\n"
-            "Bu iÅlem kullanÄ±cÄ±nÄ±n reklam bakiyesine Stars ekler. GerÃ§ek Ã¶deme almaz; admin manuel ekleme yapmÄ±Å olur."
+            "Bu i\u015flem kullan\u0131c\u0131n\u0131n reklam bakiyesine Stars ekler. Ger\xe7ek \xf6deme almaz; admin manuel ekleme yapm\u0131\u015f olur."
         )
     elif data == "admin_ad_balances":
         await ad_balances_admin_message(query.message)
@@ -1895,6 +1940,20 @@ async def admin_callback(query, context, data):
         context.user_data["target_user_id"] = int(parts[2])
         context.user_data["channel_id"] = int(parts[3])
         await query.message.reply_text(" Kac gunluk VIP vermek istiyorsun? Ornek: 14")
+    elif data.startswith("user_balance_"):
+        if not can_manage(user_id):
+            await query.message.reply_text("\u274c Yetkin yok.")
+            return
+        target_id = int(data.split("_")[2])
+        context.user_data["mode"] = "admin_add_balance_amount"
+        context.user_data["target_user_id"] = target_id
+        current_balance = await get_ad_balance(target_id)
+        await query.message.reply_text(
+            f"\U0001f4b0 Kullan\u0131c\u0131ya bakiye y\xfckle\n\n"
+            f"Kullan\u0131c\u0131 ID: {target_id}\n"
+            f"Mevcut bakiye: {current_balance} Stars\n\n"
+            "Eklenecek tutar\u0131 yaz. \xd6rnek: 2500"
+        )
     elif data.startswith("userdetail_"):
         await show_user_detail_by_id(query.message, int(data.split("_")[1]))
     elif data.startswith("usub_cancel_"):
@@ -2018,13 +2077,30 @@ async def upsert_subscription(user_id, channel_id, duration_days, price):
         base = old_end if old_end > current else current
         new_end = base + timedelta(days=int(duration_days))
         supabase.table("subscriptions").update(
-            {"end_date": new_end.isoformat(), "price": int(price), "status": "active", "warn_3d_sent": False, "warn_1d_sent": False}
+            {
+                "end_date": new_end.isoformat(),
+                "price": int(price),
+                "status": "active",
+                "warn_3d_sent": False,
+                "warn_1d_sent": False,
+                "link_resend_count": 0,
+            }
         ).eq("id", sub["id"]).execute()
         return sub.get("start_date"), new_end.isoformat()
     start = current
     end = start + timedelta(days=int(duration_days))
     supabase.table("subscriptions").insert(
-        {"user_id": int(user_id), "channel_id": int(channel_id), "start_date": start.isoformat(), "end_date": end.isoformat(), "status": "active", "price": int(price), "warn_3d_sent": False, "warn_1d_sent": False}
+        {
+            "user_id": int(user_id),
+            "channel_id": int(channel_id),
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "status": "active",
+            "price": int(price),
+            "warn_3d_sent": False,
+            "warn_1d_sent": False,
+            "link_resend_count": 0,
+        }
     ).execute()
     return start.isoformat(), end.isoformat()
 
@@ -2051,17 +2127,39 @@ async def grant_vip_to_user(message, context, target_user_id, channel_id, custom
 async def show_my_subscriptions(message, user_id):
     rows = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
     if not rows:
-        await message.reply_text("\U0001f4c5 Aktif \u00fcyelik bulunamad\u0131."); return
-    await message.reply_text("\U0001f4c5 \u00dcyeli\u011fim\n\nLink yenileme ve iptal talebi sadece a\u015fa\u011f\u0131daki aktif abonelik kartlar\u0131ndan yap\u0131l\u0131r.")
+        await message.reply_text("\U0001f4c5 Aktif \xfcyelik bulunamad\u0131.")
+        return
+
+    await message.reply_text(
+        "\U0001f4c5 \xdcyeli\u011fim\n\n"
+        "Aktif aboneliklerini buradan y\xf6netebilirsin.\n"
+        "Yeni giri\u015f linki hakk\u0131n her abonelik i\xe7in en fazla 2 kezdir.\n"
+        "\u0130ptal talebi de sadece bu ekrandaki abonelik kart\u0131ndan yap\u0131l\u0131r."
+    )
+
     for sub in rows:
         ch = await get_channel(sub["channel_id"])
         name = ch.get("name") if ch else f"Kanal ID {sub['channel_id']}"
-        kb = [
-            [InlineKeyboardButton(" Bu uyeligi uzat", callback_data=f"buyc_{sub['channel_id']}")],
-            [InlineKeyboardButton(" Yeni link gonder", callback_data=f"resend_{sub['id']}"), InlineKeyboardButton("\u274c Iptal talebi", callback_data=f"request_cancel_{sub['id']}")],
-        ]
-        await message.reply_text(f" Aktif uyeligin:\n\n Kanal: {name}\nBaslangic: {sub.get('start_date')}\nBitis: {sub.get('end_date')}\nDurum: {sub.get('status')}", reply_markup=InlineKeyboardMarkup(kb))
+        used_links = safe_int(sub.get("link_resend_count"), 0)
+        remaining_links = max(0, MAX_USER_LINK_RESENDS - used_links)
 
+        kb = [[InlineKeyboardButton("\u2b50 Bu \xfcyeli\u011fi uzat", callback_data=f"buyc_{sub['channel_id']}")]]
+
+        action_row = []
+        if remaining_links > 0:
+            action_row.append(InlineKeyboardButton(f"\U0001f517 Yeni link ({remaining_links} hak)", callback_data=f"resend_{sub['id']}"))
+        action_row.append(InlineKeyboardButton("\u274c \u0130ptal talebi", callback_data=f"request_cancel_{sub['id']}"))
+        kb.append(action_row)
+
+        await message.reply_text(
+            f"\u2705 Aktif \xfcyeli\u011fin:\n\n"
+            f"\U0001f4e2 Kanal: {name}\n"
+            f"Ba\u015flang\u0131\xe7: {sub.get('start_date')}\n"
+            f"Biti\u015f: {sub.get('end_date')}\n"
+            f"Durum: {sub.get('status')}\n"
+            f"Yeni link hakk\u0131: {remaining_links}/{MAX_USER_LINK_RESENDS}",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
 
 async def my_history(message, user_id):
     sales = supabase.table("sales").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
@@ -2499,7 +2597,7 @@ async def run_giveaway(message, context, week_key, manual=False):
 
 async def support_menu(message):
     kb = [
-        [InlineKeyboardButton("ð¤ AI Destek Cevabi", callback_data="support_ai")],
+        [InlineKeyboardButton("\U0001f916 AI Destek Cevabi", callback_data="support_ai")],
         [InlineKeyboardButton(" Link calismiyor", callback_data="support_auto_link")],
         [InlineKeyboardButton(" Odeme yaptim", callback_data="support_auto_payment")],
         [InlineKeyboardButton(" Uyelik tarihi", callback_data="support_auto_date")],
@@ -2624,8 +2722,23 @@ async def show_user_detail(message, user_row):
     user_id = user_row["user_id"]
     username = f"@{user_row.get('username')}" if user_row.get("username") else "username yok"
     blacklisted = await is_blacklisted(user_id)
-    kb_top = [[InlineKeyboardButton(" VIP Ver", callback_data=f"grant_user_{user_id}")], [InlineKeyboardButton(" Kara Listeye Al", callback_data=f"blacklist_{user_id}")] if not blacklisted else [InlineKeyboardButton(" Kara Listeden Cikar", callback_data=f"unblacklist_{user_id}")]]
-    await message.reply_text(f" Kullanici Detayi\n\nID: {user_id}\nUsername: {username}\nKara liste: {'Evet' if blacklisted else 'Hayir'}\nReferans puan: {user_row.get('referral_points') or 0}", reply_markup=InlineKeyboardMarkup(kb_top))
+    ad_balance = await get_ad_balance(user_id)
+    kb_top = [
+        [InlineKeyboardButton("\U0001f381 VIP Ver", callback_data=f"grant_user_{user_id}")],
+        [InlineKeyboardButton("\U0001f4b0 Bakiye Y\xfckle", callback_data=f"user_balance_{user_id}")],
+        [InlineKeyboardButton("\U0001f6ab Kara Listeye Al", callback_data=f"blacklist_{user_id}")]
+        if not blacklisted
+        else [InlineKeyboardButton("\u2705 Kara Listeden \xc7\u0131kar", callback_data=f"unblacklist_{user_id}")],
+    ]
+    await message.reply_text(
+        f"\U0001f464 Kullan\u0131c\u0131 Detay\u0131\n\n"
+        f"ID: {user_id}\n"
+        f"Username: {username}\n"
+        f"Kara liste: {'Evet' if blacklisted else 'Hay\u0131r'}\n"
+        f"Referans puan: {user_row.get('referral_points') or 0}\n"
+        f"Reklam bakiyesi: {ad_balance} Stars",
+        reply_markup=InlineKeyboardMarkup(kb_top),
+    )
     subs = supabase.table("subscriptions").select("*").eq("user_id", user_id).order("id", desc=True).execute().data or []
     if not subs:
         await message.reply_text("Uyelik yok."); return
@@ -2849,12 +2962,38 @@ async def mark_refund(message, admin_id, sale_id):
 async def resend_invite_link(query, context):
     sub_id = int(query.data.split("_")[1])
     sub = await get_subscription(sub_id)
+
     if not sub or int(sub.get("user_id")) != query.from_user.id or sub.get("status") != "active":
-        await query.message.reply_text(" Aktif uyelik bulunamadi."); return
+        await query.message.reply_text("\u274c Aktif \xfcyelik bulunamad\u0131.")
+        return
+
+    used_links = safe_int(sub.get("link_resend_count"), 0)
+    if used_links >= MAX_USER_LINK_RESENDS:
+        await query.message.reply_text(
+            "\u274c Yeni link hakk\u0131n bitti.\n\n"
+            f"Her abonelik i\xe7in en fazla {MAX_USER_LINK_RESENDS} kez yeni link isteyebilirsin.\n"
+            "Sorun ya\u015f\u0131yorsan Destek b\xf6l\xfcm\xfcnden admin ile ileti\u015fime ge\xe7."
+        )
+        return
+
     ch = await get_channel(sub["channel_id"])
     link = await safe_create_and_store_link(context, sub["user_id"], sub["channel_id"], ch)
-    await query.message.reply_text(f" Yeni tek kullanimlik linkin:\n{link}" if link else " Link uretilemedi. Admin ile iletisime gec.")
 
+    if not link:
+        await query.message.reply_text("\u274c Link \xfcretilemedi. Botun kanalda/grupta admin oldu\u011fundan emin ol veya destek a\xe7.")
+        return
+
+    new_count = used_links + 1
+    try:
+        supabase.table("subscriptions").update({"link_resend_count": new_count}).eq("id", sub_id).execute()
+    except Exception as e:
+        logger.warning("link_resend_count update failed: %s", e)
+
+    remaining = max(0, MAX_USER_LINK_RESENDS - new_count)
+    await query.message.reply_text(
+        f"\U0001f517 Yeni tek kullan\u0131ml\u0131k linkin:\n{link}\n\n"
+        f"Kalan yeni link hakk\u0131n: {remaining}/{MAX_USER_LINK_RESENDS}"
+    )
 
 async def broadcast_message(message, context, text):
     rows = supabase.table("users").select("*").execute().data or []
@@ -3093,7 +3232,7 @@ async def start_ad_order_channel(query, context):
     context.user_data["ad_channel_name"] = ch.get("name") or f"Kanal ID {channel_id}"
 
     kb = [
-        [InlineKeyboardButton("ð¤ AI ile Reklam Yazdir", callback_data="ad_method_ai")],
+        [InlineKeyboardButton("\U0001f916 AI ile Reklam Yazdir", callback_data="ad_method_ai")],
         [InlineKeyboardButton("\u26a1 Tek Mesajla Reklam", callback_data="ad_method_single")],
         [InlineKeyboardButton("\u2728 Haz\u0131r Reklam Olu\u015ftur", callback_data="ad_method_template")],
         [InlineKeyboardButton("\u270d\ufe0f Ad\u0131m Ad\u0131m Olu\u015ftur", callback_data="ad_method_step")],
@@ -3101,9 +3240,9 @@ async def start_ad_order_channel(query, context):
     ]
 
     await query.message.reply_text(
-        f"Reklam kanalÄ± seÃ§ildi: {ch.get('name')}\n"
+        f"Reklam kanal\u0131 se\xe7ildi: {ch.get('name')}\n"
         f"Fiyat: {price} Stars\n\n"
-        "NasÄ±l reklam oluÅturmak istiyorsun?",
+        "Nas\u0131l reklam olu\u015fturmak istiyorsun?",
         reply_markup=InlineKeyboardMarkup(kb),
     )
 
@@ -3293,7 +3432,7 @@ async def ai_check_ad_order_message(message, order_id):
     await message.reply_text("AI reklam kontrolu yapiliyor...")
     try:
         result = await ai_check_ad_content(order.get("title") or "", order.get("ad_text") or "", order.get("link") or "")
-        await message.reply_text(f"ð¤ AI Reklam Kontrolu #{order_id}\n\n{result}\n\nSon karar yine adminde. Gerekirse Onayla veya Reddet butonlarini kullan.")
+        await message.reply_text(f"\U0001f916 AI Reklam Kontrolu #{order_id}\n\n{result}\n\nSon karar yine adminde. Gerekirse Onayla veya Reddet butonlarini kullan.")
     except Exception as e:
         logger.error("AI reklam kontrol hatasi: %s", e)
         await message.reply_text("AI kontrol yapilamadi. OPENAI_API_KEY, model ve Railway loglarini kontrol et.")
@@ -3323,7 +3462,7 @@ async def ad_orders_admin_message(message):
                 InlineKeyboardButton("Eksik Bilgi", callback_data=f"ad_reject_reason_missing_{o['id']}"),
                 InlineKeyboardButton("Kurallara Aykiri", callback_data=f"ad_reject_reason_rules_{o['id']}"),
             ],
-            [InlineKeyboardButton("ð¤ AI Kontrol", callback_data=f"ad_ai_check_{o['id']}"), InlineKeyboardButton("Goruntulenme Gir", callback_data=f"ad_views_{o['id']}")],
+            [InlineKeyboardButton("\U0001f916 AI Kontrol", callback_data=f"ad_ai_check_{o['id']}"), InlineKeyboardButton("Goruntulenme Gir", callback_data=f"ad_views_{o['id']}")],
         ]
 
         image_line = "Var" if o.get("image_file_id") else "Yok"
@@ -3373,7 +3512,7 @@ async def ad_channel_prices_admin_message(message):
         await message.reply_text("Aktif kanal yok. Once VIP kanal eklemelisin.")
         return
 
-    await message.reply_text("ð£ Kanal Reklam Fiyatlari\n\nKullanicilar reklam verirken paket secmez; direkt kanal secer.")
+    await message.reply_text("\U0001f4e3 Kanal Reklam Fiyatlari\n\nKullanicilar reklam verirken paket secmez; direkt kanal secer.")
 
     for ch in rows:
         price = get_channel_ad_price(ch)
@@ -3388,20 +3527,20 @@ async def ad_channel_prices_admin_message(message):
 async def ad_balances_admin_message(message):
     rows = supabase.table("ad_balances").select("*").order("balance", desc=True).limit(20).execute().data or []
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("â KullanÄ±cÄ±ya Bakiye YÃ¼kle", callback_data="admin_add_user_balance")],
+        [InlineKeyboardButton("\u2795 Kullan\u0131c\u0131ya Bakiye Y\xfckle", callback_data="admin_add_user_balance")],
     ])
     if not rows:
         await message.reply_text(
-            "ð° Bakiye Ä°Ålemleri\n\n"
-            "HenÃ¼z bakiye kaydÄ± yok.\n\n"
-            "KullanÄ±cÄ±ya manuel reklam bakiyesi eklemek iÃ§in aÅaÄÄ±daki butona bas.",
+            "\U0001f4b0 Bakiye \u0130\u015flemleri\n\n"
+            "Hen\xfcz bakiye kayd\u0131 yok.\n\n"
+            "Kullan\u0131c\u0131ya manuel reklam bakiyesi eklemek i\xe7in a\u015fa\u011f\u0131daki butona bas.",
             reply_markup=kb,
         )
         return
-    text = "ð° Reklam Bakiyeleri\n\n"
+    text = "\U0001f4b0 Reklam Bakiyeleri\n\n"
     for r in rows:
         text += f"User ID: {r.get('user_id')} | Bakiye: {r.get('balance')} | Harcanan: {r.get('spent') or 0}\n"
-    text += "\nManuel bakiye eklemek iÃ§in aÅaÄÄ±daki butonu kullan."
+    text += "\nManuel bakiye eklemek i\xe7in a\u015fa\u011f\u0131daki butonu kullan."
     await message.reply_text(text[:3900], reply_markup=kb)
 
 async def toggle_ad_package(message, package_id, admin_id):
@@ -3640,8 +3779,8 @@ async def ad_stats_admin_message(message):
 
 async def system_test_message(message, context):
     checks = []
-    def ok(name): checks.append(f"â {name}")
-    def bad(name, err): checks.append(f"â {name}: {str(err)[:120]}")
+    def ok(name): checks.append(f"\u2705 {name}")
+    def bad(name, err): checks.append(f"\u274c {name}: {str(err)[:120]}")
     for table in ["users", "channels", "ad_balances", "ad_orders", "ad_transactions", "settings"]:
         try:
             supabase.table(table).select("*").limit(1).execute()
@@ -3656,7 +3795,7 @@ async def system_test_message(message, context):
     try:
         ch = await get_first_active_channel()
         if not ch:
-            checks.append("â ï¸ Aktif kanal yok; reklam ve VIP link testi atlandi.")
+            checks.append("\u26a0\ufe0f Aktif kanal yok; reklam ve VIP link testi atlandi.")
         else:
             me = await context.bot.get_me()
             member = await context.bot.get_chat_member(int(ch["chat_id"]), me.id)
