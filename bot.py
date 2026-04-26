@@ -1,11 +1,25 @@
 # -*- coding: utf-8 -*-
+"""
+PASHA STORE BOT - clean stable build
+Features:
+- VIP channel sales with Telegram Stars
+- Channel cards with photo
+- 2 resend-link limit per subscription
+- Automatic expiry removal every 30 min
+- Admin channel editing including name
+- Ad balance + direct channel ad orders
+- Admin can add ad balance from user detail
+- Groq/OpenAI AI: ad variations, support pre-answer, daily summary
+- Auto video transfer: depot channel -> main channel, caption stripped
+"""
+
 import os
+import re
 import io
 import csv
-import random
+import json
 import asyncio
 import logging
-import json
 from datetime import datetime, timedelta
 
 from telegram import (
@@ -31,207 +45,74 @@ try:
 except Exception:
     OpenAI = None
 
-# =========================================================
-# PASHA VIP BOT - V6 FIXED
-# Only /start is used. Everything else is buttons + guided text.
-# =========================================================
-
+# =========================
+# ENV
+# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID", "957422314"))
 
-# AI provider settings
-# Recommended free/limited setup:
-#   AI_PROVIDER=groq
-#   GROQ_API_KEY=gsk_...
-#   AI_MODEL=llama-3.1-8b-instant
-# OpenAI also remains supported:
-#   AI_PROVIDER=openai
-#   OPENAI_API_KEY=sk-...
-#   AI_MODEL=gpt-4o-mini
-AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()
+AI_PROVIDER = (os.getenv("AI_PROVIDER") or "").lower().strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-AI_MODEL = os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
-OPENAI_MODEL = AI_MODEL  # backward compatibility
-
+AI_MODEL = os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL") or "llama-3.1-8b-instant"
 if not AI_PROVIDER:
-    if GROQ_API_KEY:
-        AI_PROVIDER = "groq"
-    elif OPENAI_API_KEY:
-        AI_PROVIDER = "openai"
-
-# If Groq is selected and no explicit AI_MODEL was provided, use a current Groq production model.
-if AI_PROVIDER == "groq" and not os.getenv("AI_MODEL"):
-    AI_MODEL = "llama-3.1-8b-instant"
-    OPENAI_MODEL = AI_MODEL
+    AI_PROVIDER = "groq" if GROQ_API_KEY else ("openai" if OPENAI_API_KEY else "")
 
 DEFAULT_DURATION_DAYS = 30
 INVITE_LINK_EXPIRE_MINUTES = 30
-MAX_USER_LINK_RESENDS = 2
-BROADCAST_DELAY_SECONDS = 0.05
-ABANDONED_REMINDER_HOURS = 2
+MAX_LINK_RESENDS = 2
+AD_MIN_TOPUP = 1
+BROADCAST_DELAY = 0.05
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("pasha-v6")
+logger = logging.getLogger("pasha-v23")
 
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN Railway Variables i\u00e7inde yok.")
+    raise RuntimeError("BOT_TOKEN yok")
 if not SUPABASE_URL:
-    raise ValueError("SUPABASE_URL Railway Variables i\u00e7inde yok.")
+    raise RuntimeError("SUPABASE_URL yok")
 if not SUPABASE_KEY:
-    raise ValueError("SUPABASE_KEY Railway Variables i\u00e7inde yok.")
+    raise RuntimeError("SUPABASE_KEY yok")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# =========================
+# MENUS
+# =========================
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["\U0001f680 H\u0131zl\u0131 Ba\u015fla", "\U0001f4cc Durumum"],
-        ["\U0001f4e2 VIP Kanallar"],
-        ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
-        ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
-        ["\U0001f381 Referans"],
-        ["\u2753 SSS"],
-        ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
+        ["ð HÄ±zlÄ± BaÅla", "ð Durumum"],
+        ["ð¢ VIP Kanallar"],
+        ["ð° Bakiye", "ð£ Reklam Ver"],
+        ["ð ÃyeliÄim", "ð GeÃ§miÅim"],
+        ["ð Referans"],
+        ["â SSS"],
+        ["ð Destek", "â¹ï¸ YardÄ±m"],
     ],
     resize_keyboard=True,
 )
 
 ADMIN_MENU = ReplyKeyboardMarkup(
     [
-        ["\U0001f451 Admin Panel"],
-        ["\U0001f680 H\u0131zl\u0131 Ba\u015fla", "\U0001f4cc Durumum"],
-        ["\U0001f4e2 VIP Kanallar"],
-        ["\U0001f4b0 Bakiye", "\U0001f4e3 Reklam Ver"],
-        ["\U0001f4c5 \u00dcyeli\u011fim", "\U0001f4dc Ge\u00e7mi\u015fim"],
-        ["\U0001f381 Referans"],
-        ["\u2753 SSS"],
-        ["\U0001f198 Destek", "\u2139\ufe0f Yard\u0131m"],
+        ["ð Admin Panel"],
+        ["ð HÄ±zlÄ± BaÅla", "ð Durumum"],
+        ["ð¢ VIP Kanallar"],
+        ["ð° Bakiye", "ð£ Reklam Ver"],
+        ["ð ÃyeliÄim", "ð GeÃ§miÅim"],
+        ["ð Referans"],
+        ["â SSS"],
+        ["ð Destek", "â¹ï¸ YardÄ±m"],
     ],
     resize_keyboard=True,
 )
 
-LABEL_TO_KEY = {
-    "\\U0001f680 H\\u0131zl\\u0131 Ba\\u015fla": "Hizli Basla",
-    "\\U0001f680 Hizli Basla": "Hizli Basla",
-    "\\U0001f4cc Durumum": "Durumum",
-    "\U0001f451 Admin Panel": "Admin Panel",
-    "\U0001f4e2 VIP Kanallar": "VIP Kanallar",
-    "\U0001f4e6 Paketler": "Paketler",
-    "\U0001f4c5 \u00dcyeli\u011fim": "Uyeligim",
-    "\U0001f4c5 Uyeligim": "Uyeligim",
-    "\U0001f4dc Ge\u00e7mi\u015fim": "Gecmisim",
-    "\U0001f4dc Gecmisim": "Gecmisim",
-    "\u274c \u0130ptal Talebi": "Iptal Talebi",
-    "\u274c Iptal Talebi": "Iptal Talebi",
-    "\U0001f381 Referans": "Referans",
-    "\U0001f3c6 Liderlik": "Liderlik",
-    "\U0001f389 \u00c7ekili\u015f": "Cekilis",
-    "\U0001f389 Cekilis": "Cekilis",
-    "\U0001f39f\ufe0f Kupon Gir": "Kupon Gir",
-    "\U0001f39f Kupon Gir": "Kupon Gir",
-    "\U0001f4b0 Bakiye": "Bakiye Merkezi",
-    "\U0001f4b0 Bakiyem": "Bakiyem",
-    "\u2b50 Bakiye Y\u00fckle": "Bakiye Yukle",
-    "\u2b50 Bakiye Yukle": "Bakiye Yukle",
-    "\U0001f4e3 Reklam Ver": "Reklam Ver",
-    "\U0001f4c4 Reklamlar\u0131m": "Reklamlarim",
-    "\U0001f4c4 Reklamlarim": "Reklamlarim",
-    "\u2753 SSS": "SSS",
-    "\U0001f198 Destek": "Destek",
-    "\u2139\ufe0f Yard\u0131m": "Yardim",
-    "\u2139 Yard\u0131m": "Yardim",
-    "\u2139\ufe0f Yardim": "Yardim",
-    "\u2139 Yardim": "Yardim",
-    "Admin Panel": "Admin Panel",
-    "Hizli Basla": "Hizli Basla",
-    "H\u0131zl\u0131 Ba\u015fla": "Hizli Basla",
-    "Durumum": "Durumum",
-    "VIP Kanallar": "VIP Kanallar",
-    "Paketler": "Paketler",
-    "Uyeligim": "Uyeligim",
-    "\u00dcyeli\u011fim": "Uyeligim",
-    "Gecmisim": "Gecmisim",
-    "Ge\u00e7mi\u015fim": "Gecmisim",
-    "Iptal Talebi": "Iptal Talebi",
-    "\u0130ptal Talebi": "Iptal Talebi",
-    "Referans": "Referans",
-    "Liderlik": "Liderlik",
-    "Cekilis": "Cekilis",
-    "\u00c7ekili\u015f": "Cekilis",
-    "Kupon Gir": "Kupon Gir",
-    "Bakiye": "Bakiye Merkezi",
-    "Bakiye Merkezi": "Bakiye Merkezi",
-    "Bakiyem": "Bakiyem",
-    "Bakiye Yukle": "Bakiye Yukle",
-    "Bakiye Y\u00fckle": "Bakiye Yukle",
-    "Reklam Ver": "Reklam Ver",
-    "Reklamlarim": "Reklamlarim",
-    "Reklamlar\u0131m": "Reklamlarim",
-    "SSS": "SSS",
-    "Destek": "Destek",
-    "Yardim": "Yardim",
-    "Yard\u0131m": "Yardim",
-}
+CANCEL_WORDS = {"iptal", "vazgeÃ§", "vazgec", "geri", "cancel", "menÃ¼", "menu"}
 
-def normalize_menu_text(text: str) -> str:
-    text = (text or "").strip()
-    return LABEL_TO_KEY.get(text, text)
-
-MENU_TEXTS = set(LABEL_TO_KEY.values()) | set(LABEL_TO_KEY.keys())
-CANCEL_TEXTS = {"iptal", "\u0130ptal", "cancel", "Cancel", "vazge\u00e7", "vazgec", "geri", "men\u00fc", "menu"}
-DEFAULT_GROUP_FAQS = [
-    (
-        "Botu VIP gruba/kanala nas\u0131l ba\u011flar\u0131m?",
-        "Botu VIP grup veya kanala y\u00f6netici olarak ekle. Mesaj g\u00f6nder, kullan\u0131c\u0131 davet et ve kullan\u0131c\u0131 yasakla yetkilerini a\u00e7. Sonra grup/kanal i\u00e7ine d\u00fcz mesaj olarak id yaz; bot -100 ile ba\u015flayan Chat ID verir.",
-    ),
-    (
-        "Kanal ID ile grup ID ayn\u0131 m\u0131?",
-        "\u0130kisi de Chat ID olarak kullan\u0131l\u0131r. Telegram s\u00fcper gruplar ve kanallar genelde -100 ile ba\u015flayan ID verir. Bot VIP link \u00fcretirken bu ID'yi kullan\u0131r.",
-    ),
-    (
-        "Bot kullan\u0131c\u0131y\u0131 gruba direkt ekleyebilir mi?",
-        "Hay\u0131r. Telegram botlar\u0131 kullan\u0131c\u0131y\u0131 zorla gruba/kanala ekleyemez. Bot tek kullan\u0131ml\u0131k davet linki \u00fcretir; kullan\u0131c\u0131 linke bas\u0131p kat\u0131l\u0131r.",
-    ),
-    (
-        "Davet linki \u00e7al\u0131\u015fm\u0131yor, ne yapmal\u0131y\u0131m?",
-        "\u00dcyeli\u011fim b\u00f6l\u00fcm\u00fcnden Yeni link g\u00f6nder butonuna bas. Link yine olu\u015fmuyorsa bot VIP grupta/kanalda admin de\u011fildir veya kullan\u0131c\u0131 davet et yetkisi kapal\u0131d\u0131r.",
-    ),
-    (
-        "VIP grup mu kanal m\u0131 kullanmal\u0131y\u0131m?",
-        "Sadece i\u00e7erik yay\u0131nlayacaksan kanal daha temizdir. \u00dcyelerin konu\u015fmas\u0131n\u0131 istiyorsan grup kullan. Sat\u0131\u015f ve \u00fcyelik sistemi ikisinde de \u00e7al\u0131\u015f\u0131r.",
-    ),
-    (
-        "Grup gizli mi olmal\u0131?",
-        "Evet. VIP eri\u015fim sat\u0131yorsan grup/kanal gizli olmal\u0131. Kullan\u0131c\u0131lar sadece botun \u00fcretti\u011fi tek kullan\u0131ml\u0131k linkle girmeli.",
-    ),
-]
-
-BAD_TEXT_MARKERS = ("\u00c3", "\u00c4", "\u00c5", "\u00f0", "\ufffd")
-
-def is_bad_text(value) -> bool:
-    return any(marker in str(value or "") for marker in BAD_TEXT_MARKERS)
-
-def clean_faq_rows(rows):
-    cleaned = []
-    seen = set()
-    for row in rows or []:
-        q = (row.get("question") or "").strip()
-        a = (row.get("answer") or "").strip()
-        if not q or is_bad_text(q) or is_bad_text(a):
-            continue
-        key = q.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(row)
-    return cleaned
-
-# =========================================================
-# BASIC HELPERS
-# =========================================================
-
+# =========================
+# HELPERS
+# =========================
 def now_utc() -> datetime:
     return datetime.utcnow()
 
@@ -252,136 +133,179 @@ def safe_int(value, default=0):
         return default
 
 
-def safe_username(user):
+def username_of(user):
     return user.username if user and user.username else None
 
 
-def is_owner(user_id) -> bool:
+def is_owner(user_id: int) -> bool:
     return int(user_id) == OWNER_ID
+
+
+def normalize(text: str) -> str:
+    t = (text or "").strip()
+    # Robust button matching: emoji or no emoji both work.
+    if "Admin Panel" in t:
+        return "admin"
+    if "HÄ±zlÄ±" in t or "Hizli" in t:
+        return "quick"
+    if "Durumum" in t:
+        return "status"
+    if "VIP Kanallar" in t:
+        return "vip"
+    if "Bakiye" in t and "YÃ¼kle" not in t and "Yukle" not in t:
+        return "balance"
+    if "Reklam Ver" in t:
+        return "ad"
+    if "ÃyeliÄim" in t or "Uyeligim" in t:
+        return "subs"
+    if "GeÃ§miÅim" in t or "Gecmisim" in t:
+        return "history"
+    if "Referans" in t:
+        return "ref"
+    if "SSS" in t:
+        return "faq"
+    if "Destek" in t:
+        return "support"
+    if "YardÄ±m" in t or "Yardim" in t:
+        return "help"
+    return t
+
+
+def is_menu_text(text: str) -> bool:
+    return normalize(text) in {"admin", "quick", "status", "vip", "balance", "ad", "subs", "history", "ref", "faq", "support", "help"}
 
 
 def get_setting(key, default=None):
     try:
-        res = supabase.table("settings").select("*").eq("key", key).execute()
-        if res.data:
-            return res.data[0].get("value")
-    except Exception as e:
-        logger.warning("Setting okunamadi: %s", e)
-    return default
+        res = supabase.table("settings").select("*").eq("key", key).execute().data or []
+        return res[0].get("value") if res else default
+    except Exception:
+        return default
 
 
 def set_setting(key, value):
-    value = str(value)
-    res = supabase.table("settings").select("*").eq("key", key).execute()
-    if res.data:
-        supabase.table("settings").update({"value": value}).eq("key", key).execute()
-    else:
-        supabase.table("settings").insert({"key": key, "value": value}).execute()
+    try:
+        rows = supabase.table("settings").select("*").eq("key", key).execute().data or []
+        if rows:
+            supabase.table("settings").update({"value": str(value)}).eq("key", key).execute()
+        else:
+            supabase.table("settings").insert({"key": key, "value": str(value)}).execute()
+    except Exception as e:
+        logger.error("setting error: %s", e)
 
 
 def maintenance_on():
     return get_setting("maintenance", "off") == "on"
 
 
-def campaign_active():
-    if get_setting("campaign_enabled", "off") != "on":
-        return False
-    end = parse_dt(get_setting("campaign_end", ""))
-    return bool(end and end > now_utc())
-
-
-def campaign_percent():
-    if not campaign_active():
-        return 0
-    return max(0, min(95, safe_int(get_setting("campaign_percent", "0"), 0)))
-
-
-def get_referral_invite_points():
-    return safe_int(get_setting("referral_invite_points", "1"), 1)
-
-
-def get_referral_purchase_points():
-    return safe_int(get_setting("referral_purchase_points", "3"), 3)
-
-
-def get_referral_bonus_days():
-    return safe_int(get_setting("referral_bonus_days", "3"), 3)
-
-
-def get_weekly_winner_prize_days():
-    return safe_int(get_setting("weekly_winner_prize_days", "30"), 30)
-
-
-def get_renewal_bonus_days():
-    return safe_int(get_setting("renewal_bonus_days", "3"), 3)
-
-
-def current_week_key():
-    y, w, _ = now_utc().isocalendar()
-    return f"{y}-W{w:02d}"
-
-
-def previous_week_key():
-    d = now_utc() - timedelta(days=7)
-    y, w, _ = d.isocalendar()
-    return f"{y}-W{w:02d}"
-
-
-def ab_variant(user_id):
-    return "A" if int(user_id) % 2 == 0 else "B"
-
-
-def parse_channel_ids(text):
-    if not text:
-        return []
-    return [int(x.strip()) for x in str(text).split(",") if x.strip().isdigit()]
-
-
-def admin_role(user_id):
-    if is_owner(user_id):
-        return "owner"
-    try:
-        res = (
-            supabase.table("admins")
-            .select("*")
-            .eq("user_id", int(user_id))
-            .eq("active", True)
-            .execute()
-        )
-        if res.data:
-            return res.data[0].get("role") or "manager"
-    except Exception as e:
-        logger.warning("Admin rol okunamadi: %s", e)
-    return None
-
-
-def is_admin(user_id):
-    return admin_role(user_id) is not None
-
-
-def can_manage(user_id):
-    return admin_role(user_id) in ["owner", "manager"]
-
-
-def can_view_reports(user_id):
-    return admin_role(user_id) in ["owner", "manager", "viewer"]
+def test_mode_on():
+    return get_setting("test_mode", "off") == "on"
 
 
 async def log_event(action, actor_id=None, target_user_id=None, channel_id=None, details=None):
     try:
-        supabase.table("logs").insert(
-            {
-                "action": action,
-                "actor_id": actor_id,
-                "target_user_id": target_user_id,
-                "channel_id": channel_id,
-                "details": details,
-            }
-        ).execute()
-    except Exception as e:
-        logger.warning("Log yazilamadi: %s", e)
+        supabase.table("logs").insert({
+            "action": action,
+            "actor_id": actor_id,
+            "target_user_id": target_user_id,
+            "channel_id": channel_id,
+            "details": details,
+        }).execute()
+    except Exception:
+        pass
 
-def ai_available():
+
+def get_admin_role(user_id):
+    if is_owner(user_id):
+        return "owner"
+    try:
+        rows = supabase.table("admins").select("*").eq("user_id", int(user_id)).eq("active", True).execute().data or []
+        if rows:
+            return rows[0].get("role") or "manager"
+    except Exception:
+        pass
+    return None
+
+
+def is_admin(user_id) -> bool:
+    return get_admin_role(user_id) is not None
+
+
+def can_manage(user_id) -> bool:
+    return get_admin_role(user_id) in {"owner", "manager"}
+
+
+async def save_user(user, referrer_id=None):
+    if not user:
+        return
+    try:
+        rows = supabase.table("users").select("*").eq("user_id", user.id).execute().data or []
+        payload = {"username": username_of(user)}
+        if rows:
+            supabase.table("users").update(payload).eq("user_id", user.id).execute()
+        else:
+            payload.update({
+                "user_id": user.id,
+                "accepted_terms": True,
+                "referrer_id": referrer_id if referrer_id and referrer_id != user.id else None,
+                "created_at": now_utc().isoformat(),
+            })
+            supabase.table("users").insert(payload).execute()
+    except Exception as e:
+        logger.error("save_user error: %s", e)
+
+
+async def is_blacklisted(user_id):
+    try:
+        rows = supabase.table("blacklist").select("*").eq("user_id", int(user_id)).eq("active", True).execute().data or []
+        return bool(rows)
+    except Exception:
+        return False
+
+
+async def get_channel(channel_id):
+    try:
+        rows = supabase.table("channels").select("*").eq("id", int(channel_id)).execute().data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+async def get_subscription(sub_id):
+    try:
+        rows = supabase.table("subscriptions").select("*").eq("id", int(sub_id)).execute().data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def private_channel_link(chat_id, message_id):
+    s = str(chat_id)
+    if s.startswith("-100"):
+        return f"https://t.me/c/{s[4:]}/{message_id}"
+    return None
+
+
+def normalize_link(link):
+    link = (link or "").strip()
+    if link.startswith("@"):
+        return "https://t.me/" + link[1:]
+    if link.startswith("t.me/"):
+        return "https://" + link
+    if link.startswith("http://") or link.startswith("https://"):
+        return link
+    return None
+
+
+def risk_words(text):
+    risky = ["ifÅa", "ifsa", "leak", "sÄ±zdÄ±r", "sizdir", "Ã§ocuk", "cocuk", "minor", "reÅit", "resit"]
+    low = (text or "").lower()
+    return [w for w in risky if w in low]
+
+# =========================
+# AI
+# =========================
+def ai_available() -> bool:
     if OpenAI is None:
         return False
     if AI_PROVIDER == "groq":
@@ -391,2423 +315,348 @@ def ai_available():
     return bool(GROQ_API_KEY or OPENAI_API_KEY)
 
 
-def ai_provider_label():
-    if AI_PROVIDER == "groq":
-        return "Groq"
-    if AI_PROVIDER == "openai":
-        return "OpenAI"
-    return "AI"
-
-
-def _make_ai_client():
-    if OpenAI is None:
-        raise RuntimeError("openai paketi yuklu degil. requirements.txt icine openai ekle.")
-
-    if AI_PROVIDER == "groq":
-        if not GROQ_API_KEY:
-            raise RuntimeError("GROQ_API_KEY yok.")
-        return OpenAI(
-            api_key=GROQ_API_KEY,
-            base_url="https://api.groq.com/openai/v1",
-        )
-
-    if AI_PROVIDER == "openai":
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY yok.")
-        return OpenAI(api_key=OPENAI_API_KEY)
-
-    # Auto fallback: Groq preferred if key exists.
-    if GROQ_API_KEY:
-        return OpenAI(
-            api_key=GROQ_API_KEY,
-            base_url="https://api.groq.com/openai/v1",
-        )
-    if OPENAI_API_KEY:
-        return OpenAI(api_key=OPENAI_API_KEY)
-
-    raise RuntimeError("AI anahtari yok. GROQ_API_KEY veya OPENAI_API_KEY ekle.")
-
-
-def _ai_text_sync(instructions, user_input, max_output_tokens=500):
+def make_ai_client():
     if not ai_available():
-        raise RuntimeError("AI aktif degil. GROQ_API_KEY/OPENAI_API_KEY veya openai paketi eksik.")
-
-    client = _make_ai_client()
-
-    # Groq supports OpenAI-compatible Chat Completions.
-    # OpenAI also supports this API, so this single path works for both providers.
-    response = client.chat.completions.create(
-        model=AI_MODEL,
-        messages=[
-            {"role": "system", "content": instructions},
-            {"role": "user", "content": user_input},
-        ],
-        temperature=0.4,
-        max_tokens=max_output_tokens,
-    )
-    return (response.choices[0].message.content or "").strip()
+        return None
+    if AI_PROVIDER == "groq" or (not AI_PROVIDER and GROQ_API_KEY):
+        return OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
+    return OpenAI(api_key=OPENAI_API_KEY)
 
 
-async def ai_text(instructions, user_input, max_output_tokens=500):
-    return await asyncio.to_thread(_ai_text_sync, instructions, user_input, max_output_tokens)
+async def ai_text(prompt: str, system: str = "Sen kÄ±sa, net ve gÃ¼venli TÃ¼rkÃ§e yazan bir asistansÄ±n.", max_tokens: int = 500):
+    if not ai_available():
+        return None
+    client = make_ai_client()
+    if not client:
+        return None
+    try:
+        resp = await asyncio.to_thread(
+            client.chat.completions.create,
+            model=AI_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=max_tokens,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.error("AI error: %s", e)
+        return None
 
 
-def extract_json_object(raw):
+async def ai_ad_variations(user_text: str):
+    if risk_words(user_text):
+        return None, "Reklam metninde riskli ifade var. LÃ¼tfen yasal, nÃ¶tr ve izinli bir reklam aÃ§Ä±klamasÄ± yaz."
+    prompt = f"""
+AÅaÄÄ±daki bilgiye gÃ¶re Telegram botu iÃ§in 3 reklam varyasyonu Ã¼ret.
+Her varyasyon JSON dizisi olsun. Alanlar: title, text, button.
+Kurallar: kÄ±sa, yasal, abartÄ±sÄ±z, yanÄ±ltÄ±cÄ± deÄil. Linki metne katma.
+Bilgi:
+{user_text}
+"""
+    raw = await ai_text(prompt, max_tokens=700)
     if not raw:
-        return None
-    raw = raw.strip()
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
+        return None, "AI reklam oluÅturulamadÄ±. GROQ_API_KEY / AI_MODEL ve Railway loglarÄ±nÄ± kontrol et."
     try:
-        return json.loads(raw[start:end + 1])
+        start = raw.find("[")
+        end = raw.rfind("]")
+        data = json.loads(raw[start:end + 1]) if start != -1 and end != -1 else None
+        if isinstance(data, list) and data:
+            return data[:3], None
     except Exception:
-        return None
+        pass
+    # fallback parse as text
+    return [
+        {"title": "KÄ±sa ve Net", "text": raw[:250], "button": "Ä°ncele"},
+    ], None
 
 
-def ai_missing_text():
-    return (
-        "Yapay zeka aktif degil. Railway > Variables kismina sunlari ekle:\n"
-        "GROQ_API_KEY = gsk_...\n"
-        "AI_PROVIDER = groq\n"
-        "AI_MODEL = llama-3.1-8b-instant\n\n"
-        "Ayrica requirements.txt icinde openai satiri olmali."
-    )
+async def ai_support_answer(question: str):
+    prompt = f"""
+KullanÄ±cÄ±nÄ±n Telegram VIP botundaki sorununa kÄ±sa Ã¶n cevap ver.
+Kural: Para iadesi, Ã¼yelik silme veya kesin iÅlem sÃ¶zÃ¼ verme. Gerekirse admin'e yÃ¶nlendir.
+Soru: {question}
+"""
+    return await ai_text(prompt, max_tokens=350)
 
 
-async def ai_generate_ad_from_prompt(prompt_text):
-    instructions = (
-        "Sen Telegram reklam metni yazan kisa ve net bir asistansin. "
-        "Yasal, guvenli, yaniltici olmayan, abartisiz reklam yaz. "
-        "Yetiskin veya hassas icerik varsa acik/uygunsuz detay yazma; notr dil kullan. "
-        "Cevabi sadece JSON olarak ver: {\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"}. "
-        "title en fazla 60 karakter, text en fazla 400 karakter olsun."
-    )
-    raw = await ai_text(instructions, prompt_text, max_output_tokens=450)
-    data = extract_json_object(raw) or {}
-    title = str(data.get("title") or "").strip()
-    body = str(data.get("text") or data.get("body") or "").strip()
-    link = str(data.get("link") or "").strip()
-    return title, body, link, raw
+async def ai_daily_summary_text():
+    data = collect_daily_metrics()
+    prompt = f"""
+AÅaÄÄ±daki bot metriklerinden kÄ±sa gÃ¼nlÃ¼k iÅletme Ã¶zeti Ã§Ä±kar.
+Reklama odaklanma; VIP satÄ±Å, Ã¼yelik, destek, kullanÄ±cÄ± ve risklere bak.
+En sonda 'BugÃ¼n yapÄ±lacak 3 iÅ' yaz.
+Veri:
+{json.dumps(data, ensure_ascii=False)}
+"""
+    ans = await ai_text(prompt, max_tokens=700)
+    return ans or fallback_daily_summary(data)
 
-
-async def ai_generate_ad_variations(prompt_text):
-    """Return up to 3 safe ad options: short, sales-focused, trust-focused."""
-    instructions = (
-        "Sen Telegram reklami icin kisa ve net metinler yazan asistansin. "
-        "Yasal, guvenli, yaniltici olmayan, abartisiz reklam yaz. "
-        "Yetiskin veya hassas icerik varsa acik/uygunsuz detay yazma; notr dil kullan. "
-        "Kullanici riskli/izinsiz icerik isterse metni notr ve guvenli hale getir; yasa disi vaat yazma. "
-        "Cevabi sadece JSON olarak ver. Format: "
-        "{\"options\":[{\"label\":\"Kisa ve net\",\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"},"
-        "{\"label\":\"Satis odakli\",\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"},"
-        "{\"label\":\"Guven veren\",\"title\":\"...\",\"text\":\"...\",\"link\":\"https://...\"}]} "
-        "title en fazla 60 karakter, text en fazla 350 karakter olsun."
-    )
-    raw = await ai_text(instructions, prompt_text, max_output_tokens=900)
-    data = extract_json_object(raw) or {}
-    options = data.get("options") or []
-
-    cleaned = []
-    for opt in options:
-        if not isinstance(opt, dict):
-            continue
-        title = str(opt.get("title") or "").strip()
-        body = str(opt.get("text") or opt.get("body") or "").strip()
-        link = str(opt.get("link") or "").strip()
-        label = str(opt.get("label") or f"Secenek {len(cleaned)+1}").strip()
-        ok, _msg, clean_link = validate_ad_fields(title, body, link)
-        if ok:
-            cleaned.append({"label": label, "title": title, "text": body, "link": clean_link})
-        if len(cleaned) >= 3:
-            break
-
-    if not cleaned:
-        title, body, link, _raw = await ai_generate_ad_from_prompt(prompt_text)
-        ok, _msg, clean_link = validate_ad_fields(title, body, link)
-        if ok:
-            cleaned.append({"label": "AI onerisi", "title": title, "text": body, "link": clean_link})
-
-    return cleaned, raw
-
-
-def _safe_table_rows(table_name, limit=2000):
+# =========================
+# BALANCE
+# =========================
+def get_balance(user_id):
     try:
-        return supabase.table(table_name).select("*").limit(limit).execute().data or []
+        rows = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data or []
+        if rows:
+            return safe_int(rows[0].get("balance"), 0), safe_int(rows[0].get("spent"), 0)
     except Exception:
-        return []
+        pass
+    return 0, 0
 
 
-async def build_daily_business_snapshot():
-    today = now_utc().date().isoformat()
-    yesterday = (now_utc() - timedelta(days=1)).date().isoformat()
-
-    sales = _safe_table_rows("sales")
-    users = _safe_table_rows("users")
-    subs = _safe_table_rows("subscriptions")
-    supports = _safe_table_rows("support_requests")
-    cancel_reqs = _safe_table_rows("cancel_requests")
-    coupons = _safe_table_rows("coupons")
-    ad_orders = _safe_table_rows("ad_orders")
-    ad_tx = _safe_table_rows("ad_transactions")
-    blacklist = _safe_table_rows("blacklist")
+def ensure_balance_row(user_id):
+    balance, _ = get_balance(user_id)
     try:
-        abandoned = supabase.table("checkout_intents").select("*").eq("status", "started").eq("reminder_sent", False).execute().data or []
+        rows = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data or []
+        if not rows:
+            supabase.table("ad_balances").insert({"user_id": int(user_id), "balance": 0, "spent": 0}).execute()
     except Exception:
-        abandoned = []
-
-    def starts(row, key, prefix):
-        return str(row.get(key) or "").startswith(prefix)
-
-    def sum_price(rows):
-        total = 0
-        for r in rows:
-            if r.get("refund_status") == "refunded":
-                continue
-            total += safe_int(r.get("price"), 0)
-        return total
-
-    sales_today = [s for s in sales if starts(s, "created_at", today)]
-    sales_yesterday = [s for s in sales if starts(s, "created_at", yesterday)]
-    new_users_today = [u for u in users if starts(u, "created_at", today)]
-    active_subs = [s for s in subs if s.get("status") == "active"]
-    expired_today = [s for s in subs if s.get("status") == "expired" and starts(s, "created_at", today)]
-
-    expiring_today = []
-    expiring_3d = []
-    current = now_utc()
-    for sub in active_subs:
-        end = parse_dt(sub.get("end_date"))
-        if not end:
-            continue
-        if end.date() == current.date():
-            expiring_today.append(sub)
-        if current <= end <= current + timedelta(days=3):
-            expiring_3d.append(sub)
-
-    support_open = [s for s in supports if s.get("status") == "open"]
-    cancel_pending = [c for c in cancel_reqs if c.get("status") == "pending"]
-    coupons_used = [c for c in coupons if safe_int(c.get("used_count"), 0) > 0]
-    ad_pending = [a for a in ad_orders if a.get("status") == "pending"]
-    ad_failed = [a for a in ad_orders if a.get("status") == "failed"]
-    ad_tx_today = [t for t in ad_tx if starts(t, "created_at", today)]
-    blacklisted = [b for b in blacklist if b.get("active")]
-
-    return (
-        f"Bugun tarih: {today}\n"
-        f"VIP satis bugun: {len(sales_today)} adet / {sum_price(sales_today)} Stars\n"
-        f"VIP satis dun: {len(sales_yesterday)} adet / {sum_price(sales_yesterday)} Stars\n"
-        f"Yeni kullanici bugun: {len(new_users_today)}\n"
-        f"Aktif uyelik: {len(active_subs)}\n"
-        f"Bugun bitecek uyelik: {len(expiring_today)}\n"
-        f"3 gun icinde bitecek uyelik: {len(expiring_3d)}\n"
-        f"Bugun suresi biten uyelik kaydi: {len(expired_today)}\n"
-        f"Acik destek talebi: {len(support_open)}\n"
-        f"Bekleyen iptal talebi: {len(cancel_pending)}\n"
-        f"Kupon kullanilmis kupon sayisi: {len(coupons_used)}\n"
-        f"Yarim kalan odeme: {len(abandoned)}\n"
-        f"Reklam bakiye hareketi bugun: {len(ad_tx_today)}\n"
-        f"Bekleyen reklam talebi: {len(ad_pending)}\n"
-        f"Yayinlanamayan reklam: {len(ad_failed)}\n"
-        f"Kara listedeki aktif kullanici: {len(blacklisted)}\n"
-        f"Bakim modu: {'ACIK' if maintenance_on() else 'KAPALI'}\n"
-        f"Test modu: {'ACIK' if test_mode_on() else 'KAPALI'}"
-    )
+        pass
+    return balance
 
 
-async def ai_daily_business_summary():
-    snapshot = await build_daily_business_snapshot()
-    instructions = (
-        "Sen Telegram VIP/reklam botu icin admin isletme asistanisin. "
-        "Reklama odaklanma; butun sistemi dengeli yorumla: VIP satis, uyelik, kullanici, destek, kupon, risk, reklam/bakiye. "
-        "Cok uzun yazma. En fazla 12 satir. Sonda mutlaka 'Bugun yapilacak 3 is' basligi olsun. "
-        "Net, pratik ve karar almaya yardimci ol."
-    )
-    try:
-        return await ai_text(instructions, snapshot, max_output_tokens=650)
-    except Exception as e:
-        logger.error("AI gunluk ozet hatasi: %s", e)
-        return "AI ozet alinamadi. Genel panel ozeti:\n\n" + await admin_dashboard_text()
-
-
-async def ai_check_ad_content(title, body, link):
-    instructions = (
-        "Sen Telegram reklam moderatorusun. Reklami kisa kontrol et. "
-        "Dolandiricilik, yasa disi icerik, resit olmayanlar, izinsiz icerik, bahis/kumar, zararli link, spam, "
-        "asiri iddia ve yaniltici vaat risklerini belirt. "
-        "Sonucu Turkce ve kisa ver. Ilk satir mutlaka su uc ifadeden biri olsun: VERDICT: OK, VERDICT: RISK, VERDICT: REJECT."
-    )
-    user_input = f"Baslik: {title}\nMetin: {body}\nLink: {link}"
-    return await ai_text(instructions, user_input, max_output_tokens=350)
-
-
-async def ai_support_reply(question, user_id):
-    try:
-        active_subs = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
-        balance_row = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data or []
-        balance = safe_int(balance_row[0].get("balance"), 0) if balance_row else 0
-    except Exception:
-        active_subs = []
-        balance = 0
-    instructions = (
-        "Sen VIP Telegram botu icin destek asistanisin. Kisa, net ve sakin cevap ver. "
-        "Odeme, iade veya hesapla ilgili kesin karar verme; gerekirse admin destege yonlendir. "
-        "Kullaniciya buton yollarini anlat: Uyeligim, Bakiye, Reklamlarim, Destek. "
-        "Cevap en fazla 6 satir olsun."
-    )
-    user_input = (
-        f"Kullanici sorusu: {question}\n"
-        f"Aktif uyelik sayisi: {len(active_subs)}\n"
-        f"Reklam bakiyesi: {balance} Stars"
-    )
-    return await ai_text(instructions, user_input, max_output_tokens=300)
-
-
-
-async def ensure_defaults_once(context: ContextTypes.DEFAULT_TYPE = None):
-    # DB kurulmussa eksik ayarlari ve grup SSS kayitlarini tamamlar.
-    for key, value in {
-        "maintenance": "off",
-        "campaign_enabled": "off",
-        "campaign_percent": "0",
-        "campaign_end": "",
-        "referral_invite_points": "1",
-        "referral_purchase_points": "3",
-        "referral_bonus_days": "3",
-        "weekly_winner_prize_days": "30",
-        "renewal_bonus_days": "3",
-    }.items():
-        try:
-            if get_setting(key) is None:
-                set_setting(key, value)
-        except Exception:
-            pass
-    try:
-        existing_rows = supabase.table("faq").select("id,question,answer").execute().data or []
-        for row in existing_rows:
-            if is_bad_text(row.get("question")) or is_bad_text(row.get("answer")):
-                supabase.table("faq").update({"active": False}).eq("id", row["id"]).execute()
-        for q, a in DEFAULT_GROUP_FAQS:
-            existing = supabase.table("faq").select("id").eq("question", q).execute()
-            if not existing.data:
-                supabase.table("faq").insert({"question": q, "answer": a, "active": True}).execute()
-    except Exception as e:
-        logger.warning("Varsay\u0131lan SSS eklenemedi: %s", e)
-
-# =========================================================
-# DB ACCESS
-# =========================================================
-
-async def get_user_row(user_id):
-    try:
-        res = supabase.table("users").select("*").eq("user_id", int(user_id)).execute()
-        return res.data[0] if res.data else None
-    except Exception:
-        return None
-
-
-async def save_user(user, referrer_id=None):
-    if not user:
+def add_balance(user_id, amount, desc="Bakiye eklendi", order_id=None):
+    amount = safe_int(amount, 0)
+    if amount <= 0:
         return False
-    existing = supabase.table("users").select("*").eq("user_id", user.id).execute()
-    is_new = not bool(existing.data)
-    payload = {"username": safe_username(user)}
-    valid_ref = referrer_id and int(referrer_id) != int(user.id)
-    if is_new:
-        payload.update(
-            {
-                "user_id": user.id,
-                "accepted_terms": False,
-                "active_coupon": None,
-                "referrer_id": int(referrer_id) if valid_ref else None,
-                "referral_join_reward_given": False,
-                "referral_purchase_reward_given": False,
-                "referral_points": 0,
-                "referral_total_points": 0,
-            }
-        )
-        supabase.table("users").insert(payload).execute()
-        if valid_ref:
-            await add_referral_points(int(referrer_id), user.id, get_referral_invite_points(), "join")
-    else:
-        # Var olan kullanicinin referrer'ini sonradan degistirme; sahte referansi azaltir.
-        supabase.table("users").update(payload).eq("user_id", user.id).execute()
-    return is_new
+    ensure_balance_row(user_id)
+    bal, spent = get_balance(user_id)
+    new_bal = bal + amount
+    supabase.table("ad_balances").update({"balance": new_bal, "updated_at": now_utc().isoformat()}).eq("user_id", int(user_id)).execute()
+    supabase.table("ad_transactions").insert({"user_id": int(user_id), "amount": amount, "type": "credit", "description": desc, "order_id": order_id}).execute()
+    return True
 
 
-async def user_accepted_terms(user_id):
-    row = await get_user_row(user_id)
-    return bool(row and row.get("accepted_terms"))
-
-
-async def is_blacklisted(user_id):
-    try:
-        res = (
-            supabase.table("blacklist")
-            .select("*")
-            .eq("user_id", int(user_id))
-            .eq("active", True)
-            .execute()
-        )
-        return bool(res.data)
-    except Exception:
+def spend_balance(user_id, amount, desc="Bakiye harcandÄ±", order_id=None):
+    amount = safe_int(amount, 0)
+    ensure_balance_row(user_id)
+    bal, spent = get_balance(user_id)
+    if amount <= 0 or bal < amount:
         return False
+    supabase.table("ad_balances").update({"balance": bal - amount, "spent": spent + amount, "updated_at": now_utc().isoformat()}).eq("user_id", int(user_id)).execute()
+    supabase.table("ad_transactions").insert({"user_id": int(user_id), "amount": -amount, "type": "debit", "description": desc, "order_id": order_id}).execute()
+    return True
 
-
-async def get_channel(channel_id):
-    try:
-        res = supabase.table("channels").select("*").eq("id", int(channel_id)).single().execute()
-        return res.data
-    except Exception:
-        return None
-
-
-async def get_first_active_channel():
-    try:
-        res = supabase.table("channels").select("*").eq("active", True).order("id").limit(1).execute()
-        return res.data[0] if res.data else None
-    except Exception:
-        return None
-
-
-async def get_package(package_id):
-    try:
-        res = supabase.table("packages").select("*").eq("id", int(package_id)).single().execute()
-        return res.data
-    except Exception:
-        return None
-
-
-async def get_subscription(sub_id):
-    try:
-        res = supabase.table("subscriptions").select("*").eq("id", int(sub_id)).single().execute()
-        return res.data
-    except Exception:
-        return None
-
-# =========================================================
-# TELEGRAM CHANNEL ACTIONS
-# =========================================================
-
-async def create_one_time_invite_link(context, ch, user_id):
-    chat_id_raw = ch.get("chat_id") if ch else None
-    if not chat_id_raw:
-        return None
-    expire_timestamp = int((now_utc() + timedelta(minutes=INVITE_LINK_EXPIRE_MINUTES)).timestamp())
-    invite = await context.bot.create_chat_invite_link(
-        chat_id=int(chat_id_raw),
-        name=f"{ch.get('name', 'VIP')} - {user_id}",
-        expire_date=expire_timestamp,
-        member_limit=1,
-    )
-    return invite.invite_link
-
-
-async def safe_create_and_store_link(context, user_id, channel_id, ch):
-    try:
-        vip_link = await create_one_time_invite_link(context, ch, user_id)
-        if vip_link:
-            supabase.table("subscriptions").update({"generated_invite_link": vip_link}).eq("user_id", int(user_id)).eq("channel_id", int(channel_id)).eq("status", "active").execute()
-        return vip_link
-    except Exception as e:
-        logger.error("Davet linki uretilemedi: %s", e)
-        return None
-
-
-async def remove_user_from_channel(context, ch, user_id):
-    chat_id_raw = ch.get("chat_id") if ch else None
-    if not chat_id_raw:
-        return False
-    try:
-        await context.bot.ban_chat_member(chat_id=int(chat_id_raw), user_id=int(user_id))
-        await context.bot.unban_chat_member(chat_id=int(chat_id_raw), user_id=int(user_id), only_if_banned=True)
-        return True
-    except Exception as e:
-        logger.error("Kanaldan cikarilamadi: %s", e)
-        return False
-
-# =========================================================
-# START / TERMS / MENU ROUTING
-# =========================================================
-
-async def show_terms(message):
-    kb = [[InlineKeyboardButton("\u2705 Kabul Ediyorum", callback_data="accept_terms")]]
-    await message.reply_text(
-        " Kurallar ve Kullanim Onayi\n\n"
-        "Bu bot uzerinden verilen VIP erisimler yalnizca yasal, rizaya dayali ve kurallara uygun icerikler icindir.\n\n"
-        "Devam ederek kurallari kabul etmis olursun.",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
-
-
-def extract_referrer(args):
+# =========================
+# START / MENUS
+# =========================
+def extract_ref(args):
     if not args:
         return None
-    raw = args[0].strip()
+    raw = args[0]
     if raw.startswith("ref_"):
         raw = raw[4:]
     elif raw.startswith("ref"):
         raw = raw[3:]
-    return int(raw) if raw.isdigit() else None
+    return safe_int(raw, None) if str(raw).isdigit() else None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await ensure_defaults_once(context)
     user = update.effective_user
-    referrer_id = extract_referrer(context.args)
-    await save_user(user, referrer_id=referrer_id)
+    await save_user(user, extract_ref(context.args))
     if context.args and context.args[0].startswith("ad_"):
-        handled = await handle_ad_click_start(update, context, context.args[0])
-        if handled:
+        if await handle_ad_click_start(update, context, context.args[0]):
             return
     if await is_blacklisted(user.id) and not is_admin(user.id):
-        await update.message.reply_text("\U0001f6ab Bu botu kullanma yetkin k\u0131s\u0131tland\u0131.")
-        return
-    if not is_admin(user.id) and not await user_accepted_terms(user.id):
-        await show_terms(update.message)
+        await update.message.reply_text("ð« Bu botu kullanma yetkin kÄ±sÄ±tlandÄ±.")
         return
     await update.message.reply_text(
-        "\U0001f44b Pasha VIP admin sistemine ho\u015f geldin." if is_admin(user.id) else "\U0001f44b Pasha VIP sistemine ho\u015f geldin.",
+        "ð Pasha VIP admin sistemine hoÅ geldin." if is_admin(user.id) else "ð Pasha VIP sistemine hoÅ geldin.",
         reply_markup=ADMIN_MENU if is_admin(user.id) else MAIN_MENU,
     )
     await quick_start_message(update.message, is_admin(user.id))
 
 
-def save_detected_auto_video_chat(chat):
-    """Admin id yazd\u0131\u011f\u0131nda kanal\u0131 kaydeder. Sonra admin panelde butonla se\u00e7ilebilir."""
-    try:
-        chat_id = str(chat.id)
-        title = getattr(chat, "title", None) or getattr(chat, "username", None) or chat_id
-        chat_type = str(getattr(chat, "type", "") or "channel")
-        existing = supabase.table("auto_video_detected_chats").select("*").eq("chat_id", chat_id).execute().data or []
-        payload = {
-            "chat_id": chat_id,
-            "title": title,
-            "chat_type": chat_type,
-            "updated_at": now_utc().isoformat(),
-        }
-        if existing:
-            supabase.table("auto_video_detected_chats").update(payload).eq("chat_id", chat_id).execute()
-        else:
-            payload["created_at"] = now_utc().isoformat()
-            supabase.table("auto_video_detected_chats").insert(payload).execute()
-    except Exception as e:
-        logger.error("Detected chat save error: %s", e)
-
-
-async def channel_id_reader(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.channel_post:
-        return
-    text = (update.channel_post.text or "").lower().strip()
-    if text in ["id", "chat id", "kanal id", "grup id", "group id", "kanalid"]:
-        save_detected_auto_video_chat(update.channel_post.chat)
-        await context.bot.send_message(
-            chat_id=update.channel_post.chat_id,
-            text=(
-                f"Chat ID:\n{update.channel_post.chat_id}\n\n"
-                "Bu kanal bot paneline kaydedildi.\n"
-                "Admin Panel > Otomatik Video > Butonlu Kurulum ile se\u00e7ebilirsin."
-            ),
-        )
+async def quick_start_message(message, admin=False):
+    kb = [
+        [InlineKeyboardButton("â­ VIP SatÄ±n Al", callback_data="quick_vip")],
+        [InlineKeyboardButton("ð£ Reklam Ver", callback_data="quick_ad")],
+        [InlineKeyboardButton("ð Durumum", callback_data="quick_status")],
+        [InlineKeyboardButton("ð Destek", callback_data="quick_support")],
+    ]
+    await message.reply_text(
+        "ð HÄ±zlÄ± BaÅla\n\nNe yapmak istiyorsun?",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await ensure_defaults_once(context)
-    raw_text = update.message.text.strip()
-    text = normalize_menu_text(raw_text)
     user = update.effective_user
-    user_id = user.id
     await save_user(user)
+    raw = (update.message.text or "").strip()
+    key = normalize(raw)
 
-    # CRITICAL FIX: mode stuck bug. Any menu/cancel text clears the pending flow.
-    if context.user_data.get("mode") and (text in MENU_TEXTS or raw_text.lower() in {x.lower() for x in CANCEL_TEXTS}):
+    # Mode cancel/menu fix
+    if context.user_data.get("mode") and (raw.lower() in CANCEL_WORDS or is_menu_text(raw)):
         context.user_data.clear()
-        if raw_text.lower() in {x.lower() for x in CANCEL_TEXTS}:
-            await update.message.reply_text(
-                "\u2705 \u0130\u015flem iptal edildi. Men\u00fcden tekrar se\u00e7im yapabilirsin.",
-                reply_markup=ADMIN_MENU if is_admin(user_id) else MAIN_MENU,
-            )
+        if raw.lower() in CANCEL_WORDS:
+            await update.message.reply_text("â Ä°Ålem iptal edildi.", reply_markup=ADMIN_MENU if is_admin(user.id) else MAIN_MENU)
             return
-        # Continue with the selected menu instead of treating it as form input.
+        # continue selected menu
 
-    if await is_blacklisted(user_id) and not is_admin(user_id):
-        await update.message.reply_text("\U0001f6ab Bu botu kullanma yetkin k\u0131s\u0131tland\u0131.")
-        return
-    if not is_admin(user_id) and not await user_accepted_terms(user_id):
-        await show_terms(update.message)
-        return
     if context.user_data.get("mode"):
         await handle_text_mode(update, context)
         return
-    if maintenance_on() and not is_admin(user_id):
-        await update.message.reply_text("\U0001f527 Bot bak\u0131m modunda. L\u00fctfen daha sonra tekrar dene.")
+
+    if await is_blacklisted(user.id) and not is_admin(user.id):
+        await update.message.reply_text("ð« Bu botu kullanma yetkin kÄ±sÄ±tlandÄ±.")
+        return
+    if maintenance_on() and not is_admin(user.id):
+        await update.message.reply_text("ð§ Bot bakÄ±m modunda. LÃ¼tfen daha sonra tekrar dene.")
         return
 
-    if text == "Hizli Basla":
-        await quick_start_message(update.message, is_admin(user_id))
-    elif text == "Durumum":
-        await user_status_message(update.message, user_id)
-    elif is_admin(user_id) and text == "Admin Panel":
+    if key == "admin" and is_admin(user.id):
         await open_admin_panel(update.message)
-    elif text == "VIP Kanallar":
-        await show_vip_channels(update.message, user_id)
-    elif text == "Paketler":
-        await update.message.reply_text("\U0001f4e6 Paket sistemi kald\u0131r\u0131ld\u0131. Sat\u0131n almak i\u00e7in VIP Kanallar b\u00f6l\u00fcm\u00fcn\u00fc kullan.")
-    elif text == "Uyeligim":
-        await show_my_subscriptions(update.message, user_id)
-    elif text == "Gecmisim":
-        await my_history(update.message, user_id)
-    elif text == "Referans":
-        await referral_user_message(update.message, context, user_id)
-    elif text == "Liderlik":
-        await update.message.reply_text("\U0001f3c6 Liderlik kald\u0131r\u0131ld\u0131. Referans linkini yine Referans b\u00f6l\u00fcm\u00fcnden alabilirsin.")
-    elif text == "Cekilis":
-        await update.message.reply_text("\U0001f389 \u00c7ekili\u015f kald\u0131r\u0131ld\u0131. VIP kazanmak i\u00e7in Referans b\u00f6l\u00fcm\u00fcn\u00fc kullanabilirsin.")
-    elif text == "Iptal Talebi":
-        await update.message.reply_text("\u274c \u0130ptal talebi art\u0131k sadece \u00dcyeli\u011fim ekran\u0131ndaki aktif aboneli\u011fin alt\u0131ndan olu\u015fturulur.\n\n\U0001f4c5 \u00dcyeli\u011fim > aboneli\u011fin alt\u0131ndaki \u0130ptal talebi butonu")
-    elif text == "Kupon Gir":
-        context.user_data["mode"] = "user_coupon"
-        await update.message.reply_text("\U0001f39f\ufe0f Kupon kodunu yaz:")
-    elif text in ["Bakiye Merkezi", "Bakiyem"]:
-        await show_balance_center(update.message, user_id)
-    elif text == "Bakiye Yukle":
-        await ask_custom_topup_amount(update.message, context)
-    elif text == "Reklam Ver":
-        await show_ad_packages_user(update.message, user_id)
-    elif text == "Reklamlarim":
-        await my_ad_orders(update.message, user_id)
-    elif text == "Destek":
-        await support_menu(update.message)
-    elif text == "SSS":
+    elif key == "quick":
+        await quick_start_message(update.message, is_admin(user.id))
+    elif key == "status":
+        await user_status_message(update.message, user.id)
+    elif key == "vip":
+        await show_vip_channels(update.message, user.id)
+    elif key == "balance":
+        await show_balance_center(update.message, user.id)
+    elif key == "ad":
+        await show_ad_channel_choices(update.message, user.id)
+    elif key == "subs":
+        await show_my_subscriptions(update.message, user.id)
+    elif key == "history":
+        await my_history(update.message, user.id)
+    elif key == "ref":
+        await referral_user_message(update.message, context, user.id)
+    elif key == "faq":
         await faq_user_message(update.message)
-    elif text == "Yardim":
+    elif key == "support":
+        await support_menu(update.message)
+    elif key == "help":
         await help_message(update.message)
     else:
-        await update.message.reply_text("Men\u00fcden bir se\u00e7enek se\u00e7ebilirsin.")
+        await update.message.reply_text("MenÃ¼den bir seÃ§enek seÃ§ebilirsin.")
 
 
 async def help_message(message):
     await message.reply_text(
-        "\u2139\ufe0f Yard\u0131m\n\n"
-        "\U0001f4e2 VIP Kanallar: Sat\u0131n al\u0131nabilir kanallar\u0131 g\u00f6sterir.\n"
-
-        "\U0001f4c5 \u00dcyeli\u011fim: Aktif \u00fcyeliklerini ve link yenilemeyi g\u00f6sterir.\n"
-        "\U0001f381 Referans: Arkada\u015f getirip puan kazan\u0131rs\u0131n.\n"
-
-        "\u274c \u0130ptal: Sadece \u00dcyeli\u011fim ekran\u0131ndaki abonelik kart\u0131ndan yap\u0131l\u0131r.\n"
-        "\u2753 SSS: Grup/kanal ve \u00f6deme sorunlar\u0131 i\u00e7in haz\u0131r cevaplar.\n"
-        "\U0001f4b0 Bakiyem: Reklam bakiyeni g\u00f6sterir.\n"
-        "\U0001f4e3 Reklam Ver: Reklam talebi olu\u015fturur.\n"
-        "\U0001f198 Destek: Admin'e destek talebi g\u00f6nderir."
+        "â¹ï¸ YardÄ±m\n\n"
+        "ð¢ VIP Kanallar: SatÄ±n alÄ±nabilir kanallarÄ± gÃ¶sterir.\n"
+        "ð ÃyeliÄim: Aktif abonelik, link gÃ¶nderme ve iptal talebi burada.\n"
+        "ð° Bakiye: Reklam bakiyeni yÃ¼kler ve gÃ¶sterir.\n"
+        "ð£ Reklam Ver: Kanal seÃ§ip reklam talebi oluÅturur.\n"
+        "ð¬ Otomatik Video: Admin panelden depo kanalÄ±nÄ± ana kanala baÄlar.\n"
+        "ð Destek: Ãnce AI cevap verir, Ã§Ã¶zÃ¼lmezse adminâe gider."
     )
 
-# =========================================================
-# ADMIN PANEL
-# =========================================================
-
-
-
-def test_mode_on():
-    return get_setting("test_mode", "off") == "on"
-
-
-def normalize_ad_link(link):
-    link = (link or "").strip()
-    if link.startswith("@"):
-        return "https://t.me/" + link[1:]
-    if link.startswith("t.me/"):
-        return "https://" + link
-    if link.startswith("https://") or link.startswith("http://"):
-        return link
-    return None
-
-
-def validate_ad_fields(title, body, link):
-    title = (title or "").strip()
-    body = (body or "").strip()
-    clean_link = normalize_ad_link(link)
-    if len(title) < 3:
-        return False, "Baslik cok kisa. En az 3 karakter yaz.", None
-    if len(title) > 80:
-        return False, "Baslik cok uzun. En fazla 80 karakter yaz.", None
-    if len(body) < 10:
-        return False, "Metin cok kisa. En az 10 karakter yaz.", None
-    if len(body) > 700:
-        return False, "Metin cok uzun. En fazla 700 karakter yaz.", None
-    if not clean_link:
-        return False, "Link gecersiz. https:// veya t.me/ ile baslamali.", None
-    return True, "OK", clean_link
-
-
-async def quick_start_message(message, admin=False):
-    kb = [
-        [InlineKeyboardButton("\u2b50 VIP Sat\u0131n Al", callback_data="quick_vip")],
-        [InlineKeyboardButton("\U0001f4e3 Reklam Ver", callback_data="quick_ads")],
-        [InlineKeyboardButton("\U0001f4cc Durumum", callback_data="quick_status")],
-        [InlineKeyboardButton("\U0001f198 Destek", callback_data="quick_support")],
-    ]
-    if admin:
-        kb.insert(0, [InlineKeyboardButton("\U0001f451 Admin Panel", callback_data="admin_panel_open")])
-    await message.reply_text(
-        "\U0001f680 H\u0131zl\u0131 Ba\u015fla\n\n"
-        "Ne yapmak istiyorsun?",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
-
-
-async def user_status_message(message, user_id):
-    balance = await get_ad_balance(user_id)
-    active_subs = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
-    ad_orders = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).execute().data or []
-    user_row = await get_user_row(user_id)
-    coupon = (user_row or {}).get("active_coupon") or "Yok"
-    pending_ads = len([o for o in ad_orders if o.get("status") == "pending"])
-    published_ads = len([o for o in ad_orders if o.get("status") == "published"])
-    rejected_ads = len([o for o in ad_orders if str(o.get("status") or "").startswith("rejected") or "refunded" in str(o.get("status") or "")])
-
-    lines = ["\U0001f4cc Durumum", ""]
-    lines.append(f"\U0001f4b0 Reklam bakiyesi: {balance} Stars")
-    lines.append(f"\U0001f39f\ufe0f Aktif kupon: {coupon}")
-    lines.append(f"\U0001f4e3 Bekleyen reklam: {pending_ads}")
-    lines.append(f"\u2705 Yay\u0131nlanan reklam: {published_ads}")
-    lines.append(f"\u274c Reddedilen/iade edilen reklam: {rejected_ads}")
-    lines.append("")
-    if active_subs:
-        lines.append("\U0001f4c5 Aktif VIP \u00fcyelikler:")
-        for sub in active_subs[:5]:
-            ch = await get_channel(sub.get("channel_id"))
-            name = (ch or {}).get("name") or f"Kanal ID {sub.get('channel_id')}"
-            lines.append(f"- {name}: {sub.get('end_date')}")
-    else:
-        lines.append("\U0001f4c5 Aktif VIP \u00fcyelik: Yok")
-
-    kb = [
-        [InlineKeyboardButton("\U0001f4e2 VIP Sat\u0131n Al", callback_data="quick_vip")],
-        [InlineKeyboardButton("\U0001f4e3 Reklam Ver", callback_data="quick_ads")],
-        [InlineKeyboardButton("\U0001f4c4 Reklamlar\u0131m", callback_data="ad_my_orders")],
-    ]
-    await message.reply_text("\n".join(lines)[:3900], reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def pending_work_message(message):
-    pending_ads = supabase.table("ad_orders").select("*").eq("status", "pending").execute().data or []
-    failed_ads = supabase.table("ad_orders").select("*").in_("status", ["failed", "failed_refunded"]).execute().data or []
-    supports = supabase.table("support_requests").select("*").eq("status", "open").execute().data or []
-    cancels = supabase.table("cancel_requests").select("*").eq("status", "pending").execute().data or []
-
-    kb = [
-        [InlineKeyboardButton(f"\U0001f4e3 Reklam Talepleri ({len(pending_ads)})", callback_data="admin_ads")],
-        [InlineKeyboardButton(f"\U0001f198 Destek ({len(supports)})", callback_data="admin_support")],
-        [InlineKeyboardButton(f"\u274c \u0130ptal Talepleri ({len(cancels)})", callback_data="admin_cancel")],
-        [InlineKeyboardButton(f"\u26a0\ufe0f Yay\u0131nlanamayan Reklam ({len(failed_ads)})", callback_data="admin_ad_stats")],
-    ]
-    await message.reply_text(
-        "\U0001f4cc Bekleyen \u0130\u015fler\n\n"
-        f"Bekleyen reklam: {len(pending_ads)}\n"
-        f"A\u00e7\u0131k destek: {len(supports)}\n"
-        f"Bekleyen iptal: {len(cancels)}\n"
-        f"Yay\u0131nlanamayan reklam: {len(failed_ads)}",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
-
-async def admin_dashboard_text():
-    today = now_utc().date().isoformat()
-    month = now_utc().strftime("%Y-%m")
-    sales = supabase.table("sales").select("*").execute().data or []
-    active_subs = supabase.table("subscriptions").select("*").eq("status", "active").execute().data or []
-    supports = supabase.table("support_requests").select("*").eq("status", "open").execute().data or []
-    abandoned = supabase.table("checkout_intents").select("*").eq("status", "started").execute().data or []
-    blacklisted = supabase.table("blacklist").select("*").eq("active", True).execute().data or []
-    try:
-        pending_ads = supabase.table("ad_orders").select("*").eq("status", "pending").execute().data or []
-    except Exception:
-        pending_ads = []
-    today_count = today_stars = month_count = month_stars = 0
-    for s in sales:
-        if s.get("refund_status") == "refunded":
-            continue
-        created = str(s.get("created_at") or "")
-        price = safe_int(s.get("price"), 0)
-        if created.startswith(today):
-            today_count += 1
-            today_stars += price
-        if created.startswith(month):
-            month_count += 1
-            month_stars += price
-    expiring_today = 0
-    for sub in active_subs:
-        end = parse_dt(sub.get("end_date"))
-        if end and end.date() == now_utc().date():
-            expiring_today += 1
-    return (
-        "\U0001f451 Admin Panel\n\n"
-        f"\U0001f4ca Bug\u00fcn: {today_count} sat\u0131\u015f / {today_stars} Stars\n"
-        f"\U0001f4c6 Bu ay: {month_count} sat\u0131\u015f / {month_stars} Stars\n"
-        f"\U0001f465 Aktif \u00fcye: {len(active_subs)}\n"
-        f"\U0001f6d2 Yar\u0131m kalan \u00f6deme: {len(abandoned)}\n"
-        f"\u23f3 Bug\u00fcn bitecek \u00fcyelik: {expiring_today}\n"
-        f"\U0001f198 A\u00e7\u0131k destek: {len(supports)}\n"
-        f"\U0001f4e3 Bekleyen reklam: {len(pending_ads)}\n"
-        f"\U0001f6ab Kara liste: {len(blacklisted)}\n"
-        f"\U0001f527 Bak\u0131m modu: {'A\u00c7IK' if maintenance_on() else 'KAPALI'}"
-    )
-
-
-async def open_admin_panel(message):
-    kb = [
-        [InlineKeyboardButton("\u2795 Kanal Ekle", callback_data="admin_add_channel")],
-        [InlineKeyboardButton("\U0001f4e2 Kanallar\u0131 Y\u00f6net", callback_data="admin_channels")],
-        [InlineKeyboardButton("\U0001f381 Kullan\u0131c\u0131ya VIP Ver", callback_data="admin_grant")],
-        [InlineKeyboardButton("\U0001f4ca Son Sat\u0131\u015flar", callback_data="admin_sales"), InlineKeyboardButton("\U0001f4c8 Rapor", callback_data="admin_report")],
-        [InlineKeyboardButton("\U0001f4e2 Kanal \u0130statistikleri", callback_data="admin_channel_stats"), InlineKeyboardButton("\U0001f6d2 Yar\u0131m Kalanlar", callback_data="admin_abandoned")],
-        [InlineKeyboardButton("\U0001f465 Kullan\u0131c\u0131lar", callback_data="admin_users"), InlineKeyboardButton("\U0001f50d Kullan\u0131c\u0131 Ara", callback_data="admin_search_user")],
-        [InlineKeyboardButton("\U0001f525 Kampanya", callback_data="admin_campaign")],
-        [InlineKeyboardButton("\U0001f381 Referans Paneli", callback_data="admin_referrals")],
-        [InlineKeyboardButton("\U0001f4cc Bekleyen \u0130\u015fler", callback_data="admin_pending_work")],
-        [InlineKeyboardButton("\U0001f3ac Otomatik Video", callback_data="admin_auto_video")],
-        [InlineKeyboardButton("\U0001f916 AI G\u00fcnl\u00fck \u00d6zet", callback_data="admin_ai_summary")],
-        [InlineKeyboardButton("\U0001f4e3 Reklam Talepleri", callback_data="admin_ads"), InlineKeyboardButton("\U0001f4b8 Reklam Fiyatlari", callback_data="admin_ad_channel_prices")],
-        [InlineKeyboardButton("\U0001f4b0 Bakiye \u0130\u015flemleri", callback_data="admin_ad_balances")],
-        [InlineKeyboardButton("\U0001f4ca Reklam Istatistikleri", callback_data="admin_ad_stats"), InlineKeyboardButton("\U0001f9ea Sistem Testi", callback_data="admin_system_test")],
-        [InlineKeyboardButton("\U0001f9ea Test Modu A\u00e7/Kapat", callback_data="admin_test_mode")],
-        [InlineKeyboardButton("\u2753 SSS Y\u00f6net", callback_data="admin_faq"), InlineKeyboardButton("\U0001f198 Destek Talepleri", callback_data="admin_support")],
-        [InlineKeyboardButton("\u274c \u0130ptal Talepleri", callback_data="admin_cancel"), InlineKeyboardButton("\U0001f6ab Kara Liste", callback_data="admin_blacklist")],
-        [InlineKeyboardButton("\U0001f46e Adminler", callback_data="admin_admins"), InlineKeyboardButton("\U0001f4dc \u0130\u015flem Loglar\u0131", callback_data="admin_logs")],
-        [InlineKeyboardButton("\U0001f4c4 Sat\u0131\u015f CSV", callback_data="admin_export_sales"), InlineKeyboardButton("\U0001f194 Grup/Kanal ID Yard\u0131m\u0131", callback_data="admin_channel_id_help")],
-        [InlineKeyboardButton("\U0001f527 Bak\u0131m A\u00e7/Kapat", callback_data="admin_maintenance")],
-    ]
-    await message.reply_text(await admin_dashboard_text(), reply_markup=InlineKeyboardMarkup(kb))
-
-# =========================================================
-# DISPLAY CHANNELS / PACKAGES
-# =========================================================
-
+# =========================
+# VIP SALES
+# =========================
 async def show_vip_channels(message, user_id):
-    rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
-    if not rows:
-        await message.reply_text("\U0001f4e2 Hen\u00fcz VIP kanal eklenmedi.")
+    try:
+        rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
+    except Exception as e:
+        logger.error("channels fetch error: %s", e)
+        await message.reply_text("â Kanallar yÃ¼klenemedi. Admin veritabanÄ±nÄ± kontrol etmeli.")
         return
 
-    await message.reply_text("\U0001f4e2 VIP Kanallar\n\nSat\u0131n almak istedi\u011fin kanal kart\u0131ndaki butona bas. \u00d6deme tamamlan\u0131nca tek kullan\u0131ml\u0131k giri\u015f linkin otomatik gelir.")
+    if not rows:
+        await message.reply_text("ð¢ HenÃ¼z aktif VIP kanal yok.")
+        return
 
+    await message.reply_text(
+        "ð¢ VIP Kanallar\n\n"
+        "SatÄ±n almak istediÄin kanal kartÄ±ndaki butona bas. Ãdeme tamamlanÄ±nca tek kullanÄ±mlÄ±k giriÅ linkin otomatik gelir."
+    )
+    sent_count = 0
     for ch in rows:
-        base_price = safe_int(ch.get("price"), 0)
-        final_price, coupon_code, discount_text = await calculate_price(user_id, base_price, ch.get("id"))
-        variant = ab_variant(user_id)
-        title = "\U0001f525 Bug\u00fcne \u00f6zel VIP eri\u015fim" if variant == "B" else "\U0001f4e2 VIP Kanal"
-        campaign_line = f"\n\U0001f525 Kampanya indirimi: %{campaign_percent()}" if campaign_percent() else ""
-        coupon_line = f"\n\U0001f39f\ufe0f Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
-        description_line = f"\n\n\U0001f4dd {ch.get('description')}" if ch.get("description") else ""
-        text = (
-            f"{title}\n\n"
-            f"\U0001f4e2 {ch.get('name')}\n"
-            f"\u2b50 Fiyat: {base_price} Stars\n"
-            f"\u2705 \u00d6denecek: {final_price} Stars\n"
-            f"\u23f3 S\u00fcre: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} g\u00fcn"
-            f"{campaign_line}{coupon_line}{description_line}"
-        )
-        kb = [
-            [InlineKeyboardButton("\U0001f441\ufe0f \u00d6nizleme", callback_data=f"preview_channel_{ch['id']}")],
-            [InlineKeyboardButton(f"\u2b50 {final_price} Stars ile Sat\u0131n Al", callback_data=f"buyc_{ch['id']}")],
-        ]
-
-        photo_url = ch.get("photo_url")
-        if photo_url:
-            try:
-                await message.reply_photo(
-                    photo=photo_url,
-                    caption=text,
-                    reply_markup=InlineKeyboardMarkup(kb),
-                )
+        try:
+            price = safe_int(ch.get("price"), 0)
+            if price < 1 or not ch.get("chat_id") or not ch.get("name"):
                 continue
-            except Exception as e:
-                logger.error("Kanal gorseli gonderilemedi, text fallback kullaniliyor: %s", e)
+            text = (
+                f"ð¢ {ch.get('name')}\n"
+                f"â­ Fiyat: {price} Stars\n"
+                f"â³ SÃ¼re: {safe_int(ch.get('duration_days'), DEFAULT_DURATION_DAYS)} gÃ¼n"
+            )
+            if ch.get("description"):
+                text += f"\n\nð {ch.get('description')}"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("ðï¸ Ãnizleme", callback_data=f"chprev_{ch['id']}")],
+                [InlineKeyboardButton(f"â­ {price} Stars ile SatÄ±n Al", callback_data=f"buych_{ch['id']}")],
+            ])
+            if ch.get("photo_url"):
+                try:
+                    await message.reply_photo(photo=ch.get("photo_url"), caption=text, reply_markup=kb)
+                    sent_count += 1
+                    continue
+                except Exception as e:
+                    logger.warning("photo fallback: %s", e)
+            await message.reply_text(text, reply_markup=kb)
+            sent_count += 1
+        except Exception as e:
+            logger.error("channel card error: %s", e)
 
-        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    if sent_count == 0:
+        await message.reply_text(
+            "â Aktif kanal bulundu ama kart oluÅturulamadÄ±.\n"
+            "Admin: Kanal adÄ±, fiyat ve Chat ID alanlarÄ±nÄ± kontrol et."
+        )
 
 
 async def show_channel_preview(message, channel_id, user_id):
     ch = await get_channel(channel_id)
     if not ch:
-        await message.reply_text(" Kanal bulunamadi.")
+        await message.reply_text("â Kanal bulunamadÄ±.")
         return
-    final_price, coupon_code, discount_text = await calculate_price(user_id, safe_int(ch.get("price"), 0), channel_id)
-    coupon_line = f"\n\U0001f39f\ufe0f Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
+    price = safe_int(ch.get("price"), 0)
     text = (
-        " Kanal Onizleme\n\n"
-        f"\U0001f4e2 {ch.get('name')}\n"
-        f" Fiyat: {ch.get('price')} Stars\n"
-        f"\u2705 \u00d6denecek: {final_price} Stars\n"
-        f" Sure: {ch.get('duration_days') or DEFAULT_DURATION_DAYS} gun\n"
-        f" {ch.get('description') or 'Aciklama yok.'}\n\n"
-        " Odeme Telegram Stars ile yapilir\n"
-        " Link otomatik gonderilir\n"
-        " Uyelik tarihi botta gorunur\n"
-        " Sorun olursa destek acabilirsin"
-        f"{coupon_line}"
+        f"ðï¸ Kanal Ãnizleme\n\n"
+        f"ð¢ {ch.get('name')}\n"
+        f"â­ Fiyat: {price} Stars\n"
+        f"â³ SÃ¼re: {safe_int(ch.get('duration_days'), DEFAULT_DURATION_DAYS)} gÃ¼n\n\n"
+        f"ð {ch.get('description') or 'AÃ§Ä±klama yok.'}"
     )
-    kb = [[InlineKeyboardButton(f"\u2b50 {final_price} Stars ile Sat\u0131n Al", callback_data=f"buyc_{channel_id}")]]
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"â­ {price} Stars ile SatÄ±n Al", callback_data=f"buych_{channel_id}")]])
     if ch.get("photo_url"):
         try:
-            await message.reply_photo(ch["photo_url"], caption=text, reply_markup=InlineKeyboardMarkup(kb))
+            await message.reply_photo(photo=ch.get("photo_url"), caption=text, reply_markup=kb)
             return
         except Exception:
             pass
-    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    await message.reply_text(text, reply_markup=kb)
 
 
-async def show_packages(message, user_id):
-    rows = supabase.table("packages").select("*").eq("active", True).order("id").execute().data or []
-    if not rows:
-        await message.reply_text(" Henuz paket eklenmedi.")
-        return
-    for p in rows:
-        base_price = safe_int(p.get("price"), 0)
-        final_price, coupon_code, discount_text = await calculate_price(user_id, base_price, None)
-        coupon_line = f"\n\U0001f39f\ufe0f Kupon: {coupon_code} ({discount_text})" if coupon_code else ""
-        text = (
-            f" {p.get('name')}\n"
-            f"\u2b50 Fiyat: {base_price} Stars\n"
-            f"\u2705 \u00d6denecek: {final_price} Stars\n"
-            f" Sure: {p.get('duration_days') or DEFAULT_DURATION_DAYS} gun\n"
-            f" {p.get('description') or ''}"
-            f"{coupon_line}"
-        )
-        kb = [[InlineKeyboardButton(f" {final_price} Stars ile Paketi Al", callback_data=f"buyp_{p['id']}")]]
-        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
-
-# =========================================================
-# TEXT MODES
-# =========================================================
-
-async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mode = context.user_data.get("mode")
-    raw_text = update.message.text.strip()
-    text = normalize_menu_text(raw_text)
-    user = update.effective_user
-    user_id = user.id
-    try:
-        if mode == "add_channel":
-            parts = [p.strip() for p in text.split("|")]
-            if len(parts) < 4:
-                await update.message.reply_text(" Format: KanalAdi | Fiyat | ChatID | SureGun | Aciklama | GorselURL")
-                return
-            payload = {
-                "name": parts[0],
-                "price": int(parts[1]),
-                "chat_id": parts[2],
-                "duration_days": int(parts[3]),
-                "description": parts[4] if len(parts) >= 5 else None,
-                "photo_url": parts[5] if len(parts) >= 6 and parts[5] not in ["", "-"] else None,
-                "invite_link": "",
-                "active": True,
-            }
-            supabase.table("channels").insert(payload).execute()
-            await log_event("channel_added", user_id, details=str(payload))
-            context.user_data.clear()
-            await update.message.reply_text(f" Kanal eklendi: {payload['name']}")
-
-        elif mode == "add_package":
-            parts = [p.strip() for p in text.split("|")]
-            if len(parts) < 4:
-                await update.message.reply_text(" Format: PaketAdi | Fiyat | SureGun | KanalIDleri | Aciklama")
-                return
-            payload = {
-                "name": parts[0],
-                "price": int(parts[1]),
-                "duration_days": int(parts[2]),
-                "channel_ids": parts[3],
-                "description": parts[4] if len(parts) >= 5 else None,
-                "active": True,
-            }
-            supabase.table("packages").insert(payload).execute()
-            await log_event("package_added", user_id, details=str(payload))
-            context.user_data.clear()
-            await update.message.reply_text(f" Paket eklendi: {payload['name']}")
-
-        elif mode in ["edit_name", "edit_price", "edit_duration", "edit_chat", "edit_description", "edit_photo"]:
-            channel_id = context.user_data.get("channel_id")
-            if mode == "edit_name":
-                field, value, reply = "name", text, "\u2705 Kanal adi guncellendi."
-            elif mode == "edit_price":
-                field, value, reply = "price", int(text), "\u2705 Fiyat guncellendi."
-            elif mode == "edit_duration":
-                field, value, reply = "duration_days", int(text), " Sure guncellendi."
-            elif mode == "edit_chat":
-                field, value, reply = "chat_id", text, " Chat ID guncellendi."
-            elif mode == "edit_description":
-                field, value, reply = "description", text, " Aciklama guncellendi."
-            else:
-                field, value, reply = "photo_url", None if text == "-" else text, " Gorsel URL guncellendi."
-            supabase.table("channels").update({field: value}).eq("id", channel_id).execute()
-            await log_event("channel_updated", user_id, channel_id=channel_id, details=f"{field}={value}")
-            context.user_data.clear()
-            await update.message.reply_text(reply)
-
-        elif mode == "add_coupon":
-            parts = [p.strip() for p in text.split("|")]
-            if len(parts) < 5:
-                await update.message.reply_text(" Format: KOD | YuzdeIndirim | StarsIndirim | MaxKullanim | KanalID/0")
-                return
-            ch_id = int(parts[4])
-            payload = {
-                "code": parts[0].upper(),
-                "discount_percent": int(parts[1]),
-                "discount_stars": int(parts[2]),
-                "max_uses": int(parts[3]),
-                "channel_id": None if ch_id == 0 else ch_id,
-                "used_count": 0,
-                "active": True,
-            }
-            supabase.table("coupons").insert(payload).execute()
-            await log_event("coupon_added", user_id, details=str(payload))
-            context.user_data.clear()
-            await update.message.reply_text(" Kupon olusturuldu.")
-
-        elif mode == "add_faq":
-            parts = [p.strip() for p in text.split("|")]
-            if len(parts) < 2:
-                await update.message.reply_text(" Format: Soru | Cevap")
-                return
-            supabase.table("faq").insert({"question": parts[0], "answer": parts[1], "active": True}).execute()
-            await log_event("faq_added", user_id, details=text)
-            context.user_data.clear()
-            await update.message.reply_text(" SSS eklendi.")
-
-        elif mode == "add_admin":
-            if not is_owner(user_id):
-                context.user_data.clear()
-                await update.message.reply_text(" Sadece owner admin ekleyebilir.")
-                return
-            parts = [p.strip() for p in text.split("|")]
-            if len(parts) < 2 or parts[1].lower() not in ["manager", "viewer"]:
-                await update.message.reply_text(" Format: UserID | role\nRole: manager veya viewer")
-                return
-            target_id = int(parts[0])
-            role = parts[1].lower()
-            existing = supabase.table("admins").select("*").eq("user_id", target_id).execute()
-            if existing.data:
-                supabase.table("admins").update({"role": role, "active": True}).eq("user_id", target_id).execute()
-            else:
-                supabase.table("admins").insert({"user_id": target_id, "role": role, "active": True}).execute()
-            await log_event("admin_added", user_id, target_user_id=target_id, details=role)
-            context.user_data.clear()
-            await update.message.reply_text(" Admin eklendi.")
-
-        elif mode == "blacklist_reason":
-            target_id = context.user_data.get("target_user_id")
-            existing = supabase.table("blacklist").select("*").eq("user_id", target_id).execute()
-            if existing.data:
-                supabase.table("blacklist").update({"reason": text, "active": True}).eq("user_id", target_id).execute()
-            else:
-                supabase.table("blacklist").insert({"user_id": target_id, "reason": text, "active": True}).execute()
-            await log_event("blacklisted", user_id, target_user_id=target_id, details=text)
-            context.user_data.clear()
-            await update.message.reply_text(" Kullanici kara listeye alindi.")
-
-        elif mode == "custom_grant_days":
-            target_user_id = context.user_data.get("target_user_id")
-            channel_id = context.user_data.get("channel_id")
-            days = int(text)
-            context.user_data.clear()
-            await grant_vip_to_user(update.message, context, target_user_id, channel_id, custom_days=days)
-
-        elif mode == "campaign_start":
-            parts = [p.strip() for p in text.split("|")]
-            if len(parts) < 2:
-                await update.message.reply_text(" Format: IndirimYuzde | Saat")
-                return
-            percent = max(1, min(95, int(parts[0])))
-            hours = max(1, int(parts[1]))
-            set_setting("campaign_enabled", "on")
-            set_setting("campaign_percent", str(percent))
-            set_setting("campaign_end", (now_utc() + timedelta(hours=hours)).isoformat())
-            await log_event("campaign_started", user_id, details=text)
-            context.user_data.clear()
-            await update.message.reply_text(f" Kampanya basladi: %{percent} / {hours} saat")
-
-        elif mode == "search_user":
-            await search_user(update.message, text)
-            context.user_data.clear()
-
-        elif mode == "admin_add_balance_amount":
-            if not can_manage(user_id):
-                context.user_data.clear()
-                await update.message.reply_text("\u274c Yetkin yok.")
-                return
-
-            target_id = int(context.user_data.get("target_user_id"))
-            amount_text = raw_text.replace(" ", "").strip()
-
-            if not amount_text.isdigit():
-                await update.message.reply_text("\u274c Sadece tutar yaz. \xd6rnek: 2500")
-                return
-
-            amount = int(amount_text)
-            if amount < 1:
-                await update.message.reply_text("\u274c Tutar en az 1 Stars olmal\u0131.")
-                return
-            if amount > 1000000:
-                await update.message.reply_text("\u274c Tek seferde en fazla 1.000.000 Stars eklenebilir.")
-                return
-
-            note = "Admin kullan\u0131c\u0131 detay\u0131ndan manuel bakiye ekledi"
-            ok = await change_ad_balance(target_id, amount, "admin_add", note)
-            if not ok:
-                await update.message.reply_text("\u274c Bakiye eklenemedi. ad_balances/ad_transactions tablolar\u0131n\u0131 kontrol et.")
-                return
-
-            new_balance = await get_ad_balance(target_id)
-            await log_event("admin_added_ad_balance", user_id, target_user_id=target_id, details=f"+{amount} Stars | user detail")
-            context.user_data.clear()
-            await update.message.reply_text(
-                f"\u2705 Bakiye eklendi.\n\n"
-                f"Kullan\u0131c\u0131 ID: {target_id}\n"
-                f"Eklenen: {amount} Stars\n"
-                f"G\xfcncel bakiye: {new_balance} Stars"
-            )
-            try:
-                await context.bot.send_message(
-                    target_id,
-                    f"\U0001f4b0 Reklam bakiyene admin taraf\u0131ndan {amount} Stars eklendi.\nG\xfcncel bakiyen: {new_balance} Stars"
-                )
-            except Exception:
-                pass
-
-        elif mode == "admin_add_user_balance":
-            if not can_manage(user_id):
-                context.user_data.clear()
-                await update.message.reply_text("\u274c Yetkin yok.")
-                return
-
-            parts = [p.strip() for p in raw_text.split("|")]
-            if len(parts) < 2:
-                await update.message.reply_text("\u274c Format: UserID | Tutar | Not\n\n\xd6rnek:\n957422314 | 2500 | manuel reklam bakiyesi")
-                return
-
-            target_id_text = parts[0].replace("@", "").strip()
-            amount_text = parts[1].replace(" ", "").strip()
-            if not target_id_text.isdigit() or not amount_text.isdigit():
-                await update.message.reply_text("\u274c UserID ve tutar sadece rakam olmal\u0131. \xd6rnek: 957422314 | 2500")
-                return
-
-            target_id = int(target_id_text)
-            amount = int(amount_text)
-            note = parts[2] if len(parts) >= 3 and parts[2] else "Admin manuel bakiye y\xfckledi"
-            if amount < 1:
-                await update.message.reply_text("\u274c Tutar en az 1 Stars olmal\u0131.")
-                return
-            if amount > 1000000:
-                await update.message.reply_text("\u274c Tek seferde en fazla 1.000.000 Stars eklenebilir.")
-                return
-
-            ok = await change_ad_balance(target_id, amount, "admin_add", note)
-            if not ok:
-                await update.message.reply_text("\u274c Bakiye eklenemedi. ad_balances/ad_transactions tablolar\u0131n\u0131 kontrol et.")
-                return
-
-            new_balance = await get_ad_balance(target_id)
-            await log_event("admin_added_ad_balance", user_id, target_user_id=target_id, details=f"+{amount} Stars | {note}")
-            context.user_data.clear()
-            await update.message.reply_text(f"\u2705 Bakiye eklendi.\n\nKullan\u0131c\u0131 ID: {target_id}\nEklenen: {amount} Stars\nG\xfcncel bakiye: {new_balance} Stars")
-            try:
-                await context.bot.send_message(target_id, f"\U0001f4b0 Reklam bakiyene admin taraf\u0131ndan {amount} Stars eklendi.\nG\xfcncel bakiyen: {new_balance} Stars")
-            except Exception:
-                pass
-
-        elif mode == "ad_topup_amount":
-            amount_text = raw_text.replace(" ", "").strip()
-            if not amount_text.isdigit():
-                await update.message.reply_text("Lutfen sadece rakam yaz. Ornek: 2500")
-                return
-            amount = int(amount_text)
-            if amount < 50:
-                await update.message.reply_text("Minimum yukleme 50 Stars olmalidir.")
-                return
-            if amount > 100000:
-                await update.message.reply_text("Tek seferde en fazla 100000 Stars yukleyebilirsin.")
-                return
-            context.user_data.clear()
-            await send_custom_topup_invoice(update.message, context, amount)
-
-        elif mode == "edit_channel_ad_price":
-            if not can_manage(user_id):
-                context.user_data.clear()
-                await update.message.reply_text(" Yetkin yok.")
-                return
-            channel_id = context.user_data.get("channel_id")
-            amount_text = raw_text.replace(" ", "").strip()
-            if not amount_text.isdigit():
-                await update.message.reply_text("Lutfen sadece rakam yaz. Ornek: 1500")
-                return
-            price = int(amount_text)
-            if price < 1:
-                await update.message.reply_text("Reklam fiyati en az 1 Stars olmali.")
-                return
-            supabase.table("channels").update({"ad_price": price}).eq("id", channel_id).execute()
-            await log_event("channel_ad_price_updated", user_id, channel_id=channel_id, details=f"ad_price={price}")
-            context.user_data.clear()
-            await update.message.reply_text(f"Kanal reklam fiyati guncellendi: {price} Stars")
-
-        elif mode == "add_ad_package":
-            if not can_manage(user_id):
-                context.user_data.clear()
-                await update.message.reply_text(" Yetkin yok.")
-                return
-            parts = [p.strip() for p in text.split("|")]
-            if len(parts) < 5:
-                await update.message.reply_text(" Format: PaketAdi | Fiyat | Hedef | KanalID/0 | Aciklama\nHedef: single veya all")
-                return
-            target_type = parts[2].lower()
-            if target_type not in ["single", "all"]:
-                await update.message.reply_text(" Hedef sadece single veya all olabilir.")
-                return
-            channel_id = None if parts[3] == "0" or target_type == "all" else int(parts[3])
-            supabase.table("ad_packages").insert({"name": parts[0], "price": int(parts[1]), "target_type": target_type, "channel_id": channel_id, "description": parts[4], "active": True}).execute()
-            await log_event("ad_package_added", user_id, details=text)
-            context.user_data.clear()
-            await update.message.reply_text(" Reklam paketi eklendi.")
-
-        elif mode == "ad_ai_prompt":
-            if not ai_available():
-                context.user_data.clear()
-                await update.message.reply_text(ai_missing_text())
-                return
-            await update.message.reply_text("Yapay zeka 3 reklam onerisi hazirliyor...")
-            try:
-                options, raw_ai = await ai_generate_ad_variations(raw_text)
-                if not options:
-                    context.user_data["mode"] = "ad_ai_prompt"
-                    await update.message.reply_text(
-                        "AI uygun reklam metni uretemedi. Daha net yaz:\n\n"
-                        "Ornek: Yeni kanal icin reklam, konu: teknoloji, link: https://t.me/kanal"
-                    )
-                    return
-                context.user_data["ai_ad_options"] = options
-                lines = ["\u2728 AI reklam onerileri\n"]
-                kb = []
-                for idx, opt in enumerate(options, start=1):
-                    lines.append(
-                        f"{idx}) {opt.get('label') or 'Secenek'}\n"
-                        f"Baslik: {opt['title']}\n"
-                        f"Metin: {opt['text']}\n"
-                        f"Link: {opt['link']}\n"
-                    )
-                    kb.append([InlineKeyboardButton(f"{idx}. metni kullan", callback_data=f"ad_ai_use_{idx-1}")])
-                kb.append([InlineKeyboardButton("Yeniden Yazdir", callback_data="ad_ai_retry"), InlineKeyboardButton("Iptal", callback_data="ad_cancel")])
-                await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
-            except Exception as e:
-                logger.error("AI reklam varyasyon hatasi: %s", e)
-                context.user_data.clear()
-                await update.message.reply_text("AI reklam olusturulamadi. GROQ_API_KEY / AI_MODEL ve Railway loglarini kontrol et. Bu islem iptal edildi.")
-
-        elif mode == "ai_support_question":
-            if not ai_available():
-                context.user_data.clear()
-                await update.message.reply_text(ai_missing_text())
-                return
-            await update.message.reply_text("Yapay zeka cevabi hazirlaniyor...")
-            try:
-                answer = await ai_support_reply(raw_text, user_id)
-                context.user_data.clear()
-                kb = [
-                    [InlineKeyboardButton("Sorunum cozuldu", callback_data="support_auto_solved")],
-                    [InlineKeyboardButton("Admin ile Konus", callback_data="support_auto_admin")],
-                ]
-                await update.message.reply_text(
-                    f"\U0001f916 AI Destek Cevabi\n\n{answer}\n\n"
-                    "Cozulduyse ilk butona, cozulmediyse Admin ile Konus butonuna bas.",
-                    reply_markup=InlineKeyboardMarkup(kb),
-                )
-            except Exception as e:
-                logger.error("AI destek hatasi: %s", e)
-                context.user_data.clear()
-                await update.message.reply_text("AI destek cevabi alinamadi. Lutfen Destek butonundan admin'e yaz.")
-
-        elif mode == "ad_single_message":
-            parts = [p.strip() for p in raw_text.split("|")]
-            if len(parts) < 3:
-                await update.message.reply_text("Format: Baslik | Metin | Link")
-                return
-            title, body, link = parts[0], parts[1], parts[2]
-            ok, msg, clean_link = validate_ad_fields(title, body, link)
-            if not ok:
-                await update.message.reply_text(msg)
-                return
-            context.user_data["ad_title"] = title
-            context.user_data["ad_text"] = body
-            context.user_data["ad_link"] = clean_link
-            context.user_data["mode"] = "ad_image"
-            await update.message.reply_text(
-                "Reklam hazir. Gorsel eklemek istersen foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
-            )
-
-        elif mode == "ad_template_prompt":
-            parts = [p.strip() for p in raw_text.split("|")]
-            if len(parts) < 3:
-                await update.message.reply_text("Format: Baslik | Kisa aciklama | Link")
-                return
-            title, short_desc, link = parts[0], parts[1], parts[2]
-            body = f"{short_desc}\n\nDetaylar icin asagidaki butona bas."
-            ok, msg, clean_link = validate_ad_fields(title, body, link)
-            if not ok:
-                await update.message.reply_text(msg)
-                return
-            context.user_data["ad_title"] = title
-            context.user_data["ad_text"] = body
-            context.user_data["ad_link"] = clean_link
-            context.user_data["mode"] = "ad_image"
-            await update.message.reply_text(
-                "Hazir reklam olusturuldu. Gorsel eklemek istersen foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
-            )
-
-        elif mode == "ad_title":
-            if len(raw_text) < 3:
-                await update.message.reply_text("Baslik cok kisa. En az 3 karakter yaz.")
-                return
-            if len(raw_text) > 80:
-                await update.message.reply_text(" Baslik cok uzun. En fazla 80 karakter yaz.")
-                return
-            context.user_data["ad_title"] = raw_text
-            context.user_data["mode"] = "ad_text"
-            await update.message.reply_text(" Reklam metnini yaz. En fazla 700 karakter.")
-
-        elif mode == "ad_text":
-            if len(raw_text) < 10:
-                await update.message.reply_text("Metin cok kisa. En az 10 karakter yaz.")
-                return
-            if len(raw_text) > 700:
-                await update.message.reply_text(" Metin cok uzun. En fazla 700 karakter yaz.")
-                return
-            context.user_data["ad_text"] = raw_text
-            context.user_data["mode"] = "ad_link"
-            await update.message.reply_text(" Hedef linki yaz. Ornek: https://t.me/kanal veya https://site.com")
-
-        elif mode == "ad_link":
-            clean_link = normalize_ad_link(raw_text.strip())
-            if not clean_link:
-                await update.message.reply_text(" Link gecersiz. https:// veya t.me/ ile baslayan bir link yaz.")
-                return
-            context.user_data["ad_link"] = clean_link
-            context.user_data["mode"] = "ad_image"
-            await update.message.reply_text(
-                "Gorsel eklemek istersen simdi foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
-            )
-
-        elif mode == "ad_image":
-            if raw_text.lower() in ["skip", "gec", "yok", "hayir"]:
-                context.user_data["ad_image_file_id"] = None
-                await preview_ad_order(update.message, context)
-            else:
-                await update.message.reply_text("Lutfen foto gonder veya gorselsiz devam etmek icin skip yaz.")
-
-        elif mode == "edit_ad_pkg_price":
-            package_id = context.user_data.get("ad_package_id")
-            price = int(raw_text.strip())
-            if price < 1:
-                await update.message.reply_text("Fiyat en az 1 Stars olmali.")
-                return
-            supabase.table("ad_packages").update({"price": price}).eq("id", package_id).execute()
-            await log_event("ad_package_price_updated", user_id, details=f"package_id={package_id}, price={price}")
-            context.user_data.clear()
-            await update.message.reply_text("Reklam paketi fiyati guncellendi.")
-
-        elif mode == "edit_ad_pkg_desc":
-            package_id = context.user_data.get("ad_package_id")
-            supabase.table("ad_packages").update({"description": raw_text}).eq("id", package_id).execute()
-            await log_event("ad_package_desc_updated", user_id, details=f"package_id={package_id}")
-            context.user_data.clear()
-            await update.message.reply_text("Reklam paketi aciklamasi guncellendi.")
-
-        elif mode == "edit_ad_pkg_target":
-            package_id = context.user_data.get("ad_package_id")
-            parts = [x.strip() for x in raw_text.split("|")]
-            if len(parts) < 2 or parts[0].lower() not in ["single", "all"]:
-                await update.message.reply_text("Format: single | KanalID veya all | 0")
-                return
-            target_type = parts[0].lower()
-            channel_id = None if target_type == "all" or parts[1] == "0" else int(parts[1])
-            supabase.table("ad_packages").update({"target_type": target_type, "channel_id": channel_id}).eq("id", package_id).execute()
-            await log_event("ad_package_target_updated", user_id, details=f"package_id={package_id}, target={target_type}, channel_id={channel_id}")
-            context.user_data.clear()
-            await update.message.reply_text("Reklam paketi hedefi guncellendi.")
-
-        elif mode == "ad_update_views":
-            order_id = context.user_data.get("ad_order_id")
-            views = int(raw_text.strip())
-            if views < 0:
-                await update.message.reply_text("Goruntulenme negatif olamaz.")
-                return
-            supabase.table("ad_orders").update({"views_count": views, "views_updated_at": now_utc().isoformat()}).eq("id", order_id).execute()
-            await log_event("ad_views_updated", user_id, details=f"order_id={order_id}, views={views}")
-            context.user_data.clear()
-            await update.message.reply_text("Reklam goruntulenme sayisi guncellendi.")
-
-        elif mode == "add_auto_video_route":
-            if not can_manage(user_id):
-                context.user_data.clear()
-                await update.message.reply_text("\u274c Yetkin yok.")
-                return
-            parts = [p.strip() for p in raw_text.split("|")]
-            if len(parts) < 2:
-                await update.message.reply_text(
-                    "Format: KaynakChatID | HedefChatID | Not\n\n"
-                    "\u00d6rnek:\n"
-                    "-1001111111111 | -1002222222222 | Depo -> Ana Kanal"
-                )
-                return
-            source_chat_id = parts[0]
-            target_chat_id = parts[1]
-            name = parts[2] if len(parts) >= 3 and parts[2] else "Video Aktarma"
-            if not source_chat_id.startswith("-100") or not target_chat_id.startswith("-100"):
-                await update.message.reply_text(
-                    "Chat ID degerleri genelde -100 ile baslar.\n"
-                    "Kaynak ve hedef kanala id yazip dogru ID'leri aldigindan emin ol."
-                )
-                return
-            payload = {
-                "source_chat_id": source_chat_id,
-                "target_chat_id": target_chat_id,
-                "name": name,
-                "active": True,
-                "strip_caption": True,
-            }
-            supabase.table("auto_video_routes").insert(payload).execute()
-            await log_event("auto_video_route_added", user_id, details=str(payload))
-            context.user_data.clear()
-            await update.message.reply_text(
-                "\u2705 Otomatik video aktarma kuruldu.\n\n"
-                "Depo kanal\u0131na yeni video att\u0131\u011f\u0131nda bot ana kanala sadece videoyu yollar. Video alt\u0131ndaki yaz\u0131 silinir."
-            )
-
-        elif mode == "user_coupon":
-            code = text.upper()
-            coupon = await get_coupon(code)
-            if not coupon or not coupon.get("active"):
-                context.user_data.clear()
-                await update.message.reply_text(" Kupon bulunamadi veya aktif degil.")
-                return
-            if int(coupon.get("max_uses") or 0) > 0 and int(coupon.get("used_count") or 0) >= int(coupon.get("max_uses") or 0):
-                context.user_data.clear()
-                await update.message.reply_text(" Bu kuponun kullanim limiti dolmus.")
-                return
-            supabase.table("users").update({"active_coupon": code}).eq("user_id", user_id).execute()
-            context.user_data.clear()
-            await update.message.reply_text(f" Kupon uygulandi: {code}")
-
-        elif mode == "user_support":
-            if await is_blacklisted(user_id):
-                context.user_data.clear()
-                await update.message.reply_text(" Destek talebi olusturamazsin.")
-                return
-            supabase.table("support_requests").insert({"user_id": user_id, "username": safe_username(user), "message": text, "status": "open"}).execute()
-            await log_event("support_created", user_id, target_user_id=user_id, details=text)
-            context.user_data.clear()
-            await update.message.reply_text(" Destek talebin admin'e gonderildi.")
-            await context.bot.send_message(OWNER_ID, f" Yeni destek talebi!\n\nKullanici: @{safe_username(user) or 'yok'}\nID: {user_id}\n\n{text}")
-
-        elif mode == "broadcast":
-            context.user_data.clear()
-            await broadcast_message(update.message, context, text)
-
-    except Exception as e:
-        logger.error("Text mode hatasi: %s", e)
-        context.user_data.clear()
-        await update.message.reply_text(" Islem sirasinda hata oldu. Formati kontrol et. Islem modu kapatildi.")
-
-
-# =========================================================
-# AUTO VIDEO TRANSFER
-# =========================================================
-
-def get_detected_auto_video_chats(limit=20):
-    try:
-        return (
-            supabase.table("auto_video_detected_chats")
-            .select("*")
-            .order("updated_at", desc=True)
-            .limit(limit)
-            .execute()
-            .data
-            or []
-        )
-    except Exception as e:
-        logger.error("Detected chats read error: %s", e)
-        return []
-
-
-async def show_auto_video_chat_picker(message, context, role):
-    rows = get_detected_auto_video_chats()
-    if role == "source":
-        title = "1/2: Video depo kanal\u0131n\u0131 se\u00e7"
-        info = (
-            "A\u015fa\u011f\u0131dan video y\u00fckleyece\u011fin depo kanal\u0131n\u0131 se\u00e7.\n"
-            "Listede kanal yoksa \u00f6nce o kanala id yaz."
-        )
-        prefix = "av_src:"
-    else:
-        title = "2/2: Ana payla\u015f\u0131m kanal\u0131n\u0131 se\u00e7"
-        source = context.user_data.get("av_source_chat_id")
-        info = (
-            f"Depo kanal se\u00e7ildi: {source}\n"
-            "\u015eimdi videolar\u0131n payla\u015f\u0131laca\u011f\u0131 ana kanal\u0131 se\u00e7."
-        )
-        prefix = "av_tgt:"
-
-    if not rows:
-        await message.reply_text(
-            f"{title}\n\n"
-            "Kay\u0131tl\u0131 kanal bulunamad\u0131.\n\n"
-            "Yap\u0131lacaklar:\n"
-            "1. Botu depo ve ana kanala admin yap.\n"
-            "2. Her iki kanala da d\u00fcz mesaj olarak id yaz.\n"
-            "3. Buraya d\u00f6n\u00fcp tekrar Butonlu Kurulum'a bas."
-        )
-        return
-
-    kb = []
-    selected_source = context.user_data.get("av_source_chat_id")
-    for r in rows:
-        chat_id = str(r.get("chat_id"))
-        if role == "target" and chat_id == str(selected_source):
-            continue
-        label = f"{r.get('title') or 'Kanal'} | {chat_id}"
-        if len(label) > 60:
-            label = label[:57] + "..."
-        kb.append([InlineKeyboardButton(label, callback_data=f"{prefix}{chat_id}")])
-
-    kb.append([InlineKeyboardButton("\u274c \u0130ptal", callback_data="av_cancel_setup")])
-    await message.reply_text(f"{title}\n\n{info}", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def create_auto_video_route_from_selection(message, context, source_chat_id, target_chat_id):
-    if not source_chat_id or not target_chat_id:
-        await message.reply_text("Kaynak veya hedef kanal se\u00e7ilmedi. Kurulumu yeniden ba\u015flat.")
-        return
-
-    source_row = None
-    target_row = None
-    for r in get_detected_auto_video_chats():
-        if str(r.get("chat_id")) == str(source_chat_id):
-            source_row = r
-        if str(r.get("chat_id")) == str(target_chat_id):
-            target_row = r
-
-    source_name = (source_row or {}).get("title") or "Video Depo"
-    target_name = (target_row or {}).get("title") or "Ana Kanal"
-    route_name = f"{source_name} -> {target_name}"
-
-    existing = (
-        supabase.table("auto_video_routes")
-        .select("*")
-        .eq("source_chat_id", str(source_chat_id))
-        .eq("target_chat_id", str(target_chat_id))
-        .execute()
-        .data
-        or []
-    )
-    payload = {
-        "source_chat_id": str(source_chat_id),
-        "target_chat_id": str(target_chat_id),
-        "name": route_name,
-        "active": True,
-        "strip_caption": True,
-    }
-
-    if existing:
-        supabase.table("auto_video_routes").update(payload).eq("id", existing[0]["id"]).execute()
-        route_id = existing[0]["id"]
-        action_text = "mevcut rota g\u00fcncellendi"
-    else:
-        result = supabase.table("auto_video_routes").insert(payload).execute()
-        route_id = (result.data or [{}])[0].get("id")
-        action_text = "yeni rota kuruldu"
-
-    await log_event("auto_video_route_button_setup", message.chat_id, details=str(payload))
-    context.user_data.pop("av_source_chat_id", None)
-    await message.reply_text(
-        "\u2705 Otomatik video aktarma haz\u0131r.\n\n"
-        f"Durum: {action_text}\n"
-        f"Depo kanal: {source_name}\n"
-        f"Ana kanal: {target_name}\n\n"
-        "Bundan sonra depo kanal\u0131na video att\u0131\u011f\u0131nda ana kanala sadece video gider. "
-        "Videonun alt\u0131ndaki yaz\u0131/caption g\u00f6nderilmez."
-    )
-
-
-async def admin_auto_video_menu(message):
-    rows = supabase.table("auto_video_routes").select("*").order("id", desc=True).execute().data or []
-    kb = [
-        [InlineKeyboardButton("\U0001f9ed Butonlu Kurulum", callback_data="av_wizard")],
-        [InlineKeyboardButton("\u270d\ufe0f Elle Chat ID ile Ekle", callback_data="av_add")],
-    ]
-    await message.reply_text(
-        "\U0001f3ac Otomatik Video Aktarma\n\n"
-        "Depo kanal\u0131na att\u0131\u011f\u0131n yeni videolar ana kanala otomatik g\u00f6nderilir.\n"
-        "Depo kanal\u0131ndaki a\u00e7\u0131klama/caption silinir; ana kanala sadece video gider.\n\n"
-        "Kolay kurulum:\n"
-        "1. Botu depo kanal\u0131na admin yap.\n"
-        "2. Botu ana kanala admin yap.\n"
-        "3. \u0130ki kanala da d\u00fcz mesaj olarak id yaz.\n"
-        "4. Butonlu Kurulum'a bas\u0131p depo ve ana kanal\u0131 se\u00e7.",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
-    if not rows:
-        await message.reply_text("Hen\u00fcz otomatik video rotas\u0131 yok.")
-        return
-    for r in rows:
-        status = "Aktif" if r.get("active") else "Pasif"
-        route_kb = [
-            [
-                InlineKeyboardButton("A\u00e7/Kapat", callback_data=f"av_toggle_{r['id']}"),
-                InlineKeyboardButton("Sil", callback_data=f"av_delete_{r['id']}"),
-            ]
-        ]
-        await message.reply_text(
-            f"\U0001f3ac Rota #{r['id']}\n"
-            f"Ad: {r.get('name') or '-'}\n"
-            f"Kaynak: {r.get('source_chat_id')}\n"
-            f"Hedef: {r.get('target_chat_id')}\n"
-            f"Durum: {status}\n"
-            f"Caption: Silinir",
-            reply_markup=InlineKeyboardMarkup(route_kb),
-        )
-
-async def auto_video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    post = update.channel_post
-    if not post or not post.video:
-        return
-
-    source_chat_id = str(post.chat_id)
-    try:
-        routes = (
-            supabase.table("auto_video_routes")
-            .select("*")
-            .eq("source_chat_id", source_chat_id)
-            .eq("active", True)
-            .execute()
-            .data
-            or []
-        )
-    except Exception as e:
-        logger.error("Auto video route read error: %s", e)
-        return
-
-    if not routes:
-        return
-
-    for route in routes:
-        route_id = route.get("id")
-        target_chat_id = route.get("target_chat_id")
-        try:
-            existing = (
-                supabase.table("auto_video_sent")
-                .select("id")
-                .eq("route_id", route_id)
-                .eq("source_message_id", post.message_id)
-                .execute()
-                .data
-                or []
-            )
-            if existing:
-                continue
-
-            sent = await context.bot.send_video(
-                chat_id=int(target_chat_id),
-                video=post.video.file_id,
-                caption=None,
-                supports_streaming=True,
-            )
-            supabase.table("auto_video_sent").insert(
-                {
-                    "route_id": route_id,
-                    "source_chat_id": source_chat_id,
-                    "source_message_id": post.message_id,
-                    "target_chat_id": str(target_chat_id),
-                    "target_message_id": sent.message_id,
-                    "video_file_id": post.video.file_id,
-                }
-            ).execute()
-            await log_event(
-                "auto_video_sent",
-                actor_id=None,
-                details=f"route_id={route_id}, source={source_chat_id}, target={target_chat_id}, source_msg={post.message_id}",
-            )
-        except Exception as e:
-            logger.error("Auto video send error: %s", e)
-            await log_event(
-                "auto_video_failed",
-                actor_id=None,
-                details=f"route_id={route_id}, source={source_chat_id}, target={target_chat_id}, error={e}",
-            )
-
-# =========================================================
-# CALLBACK ROUTER
-# =========================================================
-
-async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = query.from_user.id
-
-    if data == "accept_terms":
-        supabase.table("users").update({"accepted_terms": True}).eq("user_id", user_id).execute()
-        await query.message.reply_text("\u2705 Kurallar\u0131 kabul ettin. Men\u00fcden devam edebilirsin.", reply_markup=MAIN_MENU)
-        return
-
-    # public callbacks
-    if data.startswith("preview_channel_"):
-        await show_channel_preview(query.message, int(data.split("_")[2]), user_id)
-        return
-    if data.startswith("buyc_"):
-        await handle_buy_channel(query, context)
-        return
-    if data.startswith("buyp_"):
-        await handle_buy_package(query, context)
-        return
-    if data.startswith("resend_"):
-        await resend_invite_link(query, context)
-        return
-    if data.startswith("request_cancel_"):
-        await request_cancel_from_button(query, context)
-        return
-    if data.startswith("faq_view_"):
-        await faq_answer(query.message, int(data.split("_")[2]))
-        return
-    if data.startswith("redeem_"):
-        await redeem_referral_reward(query, context)
-        return
-    if data.startswith("support_auto_"):
-        await support_auto_answer(query.message, data.split("_", 2)[2])
-        return
-    if data == "ad_balance_center":
-        await show_balance_center(query.message, user_id)
-        return
-    if data == "ad_topup_custom":
-        await ask_custom_topup_amount(query.message, context)
-        return
-    if data == "ad_show_packages":
-        await show_ad_channels_user(query.message, user_id)
-        return
-    if data == "ad_my_orders":
-        await my_ad_orders(query.message, user_id)
-        return
-    if data == "ad_transactions":
-        await show_ad_transactions(query.message, user_id)
-        return
-    if data.startswith("topup_"):
-        await handle_topup(query, context)
-        return
-    if data.startswith("adch_") and len(data.split("_")) == 2 and data.split("_")[1].isdigit():
-        await start_ad_order_channel(query, context)
-        return
-    if data.startswith("adpkg_") and len(data.split("_")) == 2 and data.split("_")[1].isdigit():
-        await start_ad_order(query, context)
-        return
-    if data == "ad_submit":
-        await submit_ad_order(query, context)
-        return
-    if data == "ad_cancel":
-        context.user_data.clear()
-        await query.message.reply_text(" Reklam talebi iptal edildi.")
-        return
-    if data == "quick_vip":
-        await show_vip_channels(query.message, user_id)
-        return
-    if data == "quick_ads":
-        await show_balance_center(query.message, user_id)
-        return
-    if data == "quick_status":
-        await user_status_message(query.message, user_id)
-        return
-    if data == "quick_support":
-        await support_menu(query.message)
-        return
-    if data == "admin_panel_open":
-        if is_admin(user_id):
-            await open_admin_panel(query.message)
-        else:
-            await query.message.reply_text("Yetkin yok.")
-        return
-    if data == "support_ai":
-        context.user_data["mode"] = "ai_support_question"
-        await query.message.reply_text(
-            "Sorununu tek mesaj olarak yaz. AI once kisa cozum onerecek. Cozulmezse admin'e yonlendirir."
-        )
-        return
-    if data == "ad_method_ai":
-        if not context.user_data.get("ad_channel_id"):
-            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
-            return
-        if not ai_available():
-            await query.message.reply_text(ai_missing_text())
-            return
-        context.user_data["mode"] = "ad_ai_prompt"
-        await query.message.reply_text(
-            "AI ile reklam yazdirmak icin reklamini kisaca anlat ve linki ekle.\n\n"
-            "Ornek:\n"
-            "Yeni VIP kanal reklami. Hizli katilim, Stars ile odeme. Link: https://t.me/kanal"
-        )
-        return
-    if data == "ad_ai_retry":
-        if not context.user_data.get("ad_channel_id"):
-            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
-            return
-        context.user_data["mode"] = "ad_ai_prompt"
-        await query.message.reply_text("Reklami tekrar kisaca anlat ve linki ekle:")
-        return
-    if data.startswith("ad_ai_use"):
-        options = context.user_data.get("ai_ad_options") or []
-        idx = 0
-        parts = data.split("_")
-        if len(parts) >= 4 and parts[-1].isdigit():
-            idx = int(parts[-1])
-        if options and 0 <= idx < len(options):
-            selected = options[idx]
-            title = selected.get("title")
-            body = selected.get("text")
-            link = selected.get("link")
-        else:
-            title = context.user_data.get("ai_ad_title")
-            body = context.user_data.get("ai_ad_text")
-            link = context.user_data.get("ai_ad_link")
-        ok, msg, clean_link = validate_ad_fields(title or "", body or "", link or "")
-        if not ok:
-            await query.message.reply_text("AI metni eksik gorunuyor. Yeniden yazdir.")
-            return
-        context.user_data["ad_title"] = title
-        context.user_data["ad_text"] = body
-        context.user_data["ad_link"] = clean_link
-        context.user_data["mode"] = "ad_image"
-        await query.message.reply_text(
-            "AI metni secildi. Gorsel eklemek istersen foto gonder. Gorselsiz devam etmek icin butona bas veya skip yaz.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gorselsiz Devam", callback_data="ad_no_image")]]),
-        )
-        return
-    if data == "ad_method_single":
-        if not context.user_data.get("ad_channel_id"):
-            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
-            return
-        context.user_data["mode"] = "ad_single_message"
-        await query.message.reply_text(
-            "Reklamini tek mesajda gonder:\n\n"
-            "Baslik | Metin | Link\n\n"
-            "Ornek:\n"
-            "Yeni Kanal | Guncel paylasimlar icin hemen incele | https://t.me/kanal"
-        )
-        return
-    if data == "ad_method_template":
-        if not context.user_data.get("ad_channel_id"):
-            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
-            return
-        context.user_data["mode"] = "ad_template_prompt"
-        await query.message.reply_text(
-            "Hazir reklam olusturmak icin yaz:\n\n"
-            "Baslik | Kisa aciklama | Link\n\n"
-            "Ornek:\n"
-            "Yeni Kanal | Guncel icerikler ve ozel paylasimlar | https://t.me/kanal"
-        )
-        return
-    if data == "ad_method_step":
-        if not context.user_data.get("ad_channel_id"):
-            await query.message.reply_text("Once reklam vermek istedigin kanali sec.")
-            return
-        context.user_data["mode"] = "ad_title"
-        await query.message.reply_text("Simdi reklam basligini yaz. Ornek: Yeni VIP Kanal")
-        return
-    if data == "ad_no_image":
-        if context.user_data.get("mode") != "ad_image":
-            await query.message.reply_text("Aktif gorsel adimi yok.")
-            return
-        context.user_data["ad_image_file_id"] = None
-        await preview_ad_order(query.message, context)
-        return
-
-    # protected callbacks
-    if not is_admin(user_id):
-        await query.message.reply_text(" Yetkin yok.")
-        return
-
-    if data.startswith("ad_ai_check_"):
-        if not can_manage(user_id):
-            await query.message.reply_text(" Yetkin yok.")
-            return
-        order_id = int(data.split("_")[3])
-        await ai_check_ad_order_message(query.message, order_id)
-        return
-    if data.startswith("cancel_"):
-        await handle_cancel_admin(query, context)
-        return
-    if data.startswith("support_close_"):
-        if not can_manage(user_id):
-            await query.message.reply_text(" Yetkin yok.")
-            return
-        rid = int(data.split("_")[2])
-        supabase.table("support_requests").update({"status": "closed"}).eq("id", rid).execute()
-        await log_event("support_closed", user_id, details=f"request_id={rid}")
-        await query.message.reply_text(" Destek talebi kapatildi.")
-        return
-    if data.startswith("ad_reject_reason_"):
-        if not can_manage(user_id):
-            await query.message.reply_text(" Yetkin yok.")
-            return
-        parts = data.split("_")
-        reason_code = parts[3]
-        order_id = int(parts[4])
-        reason_map = {
-            "content": "Uygunsuz icerik",
-            "link": "Link hatali",
-            "missing": "Eksik bilgi",
-            "rules": "Kurallara aykiri",
-        }
-        await reject_and_refund_ad(query.message, order_id, user_id, reason_map.get(reason_code, "Admin reddetti"))
-        return
-
-    try:
-        await admin_callback(query, context, data)
-    except Exception as e:
-        logger.error("Callback hatasi: %s", e)
-        context.user_data.clear()
-        await query.message.reply_text(" Islem sirasinda hata oldu. Mod kapatildi.")
-
-
-async def admin_callback(query, context, data):
-    user_id = query.from_user.id
-    if data == "admin_add_channel":
-        if not can_manage(user_id):
-            await query.message.reply_text(" Yetkin yok."); return
-        context.user_data["mode"] = "add_channel"
-        await query.message.reply_text(" Kanal bilgilerini yaz:\n\nKanalAdi | Fiyat | ChatID | SureGun | Aciklama | GorselURL\n\nOrnek:\nVIP | 2500 | -1001234567890 | 30 | Gunluk VIP kanal | https://site.com/resim.jpg\n\nGorsel yoksa son kismi bos birakabilirsin.")
-    elif data == "admin_add_package":
-        if not can_manage(user_id):
-            await query.message.reply_text(" Yetkin yok."); return
-        context.user_data["mode"] = "add_package"
-        await query.message.reply_text(" Paket ekle:\n\nPaketAdi | Fiyat | SureGun | KanalIDleri | Aciklama\n\nOrnek:\nTumVIP | 6000 | 30 | 1,2,3 | Tum VIP kanallar")
-    elif data == "admin_channels":
-        await list_channels_manage(query.message)
-    elif data == "admin_packages":
-        await list_packages_manage(query.message)
-    elif data == "admin_grant":
-        await show_users_for_grant(query.message)
-    elif data == "admin_sales":
-        await sales_message(query.message)
-    elif data == "admin_report":
-        await report_message(query.message)
-    elif data == "admin_auto_video":
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        await admin_auto_video_menu(query.message)
-    elif data == "av_wizard":
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        context.user_data.pop("av_source_chat_id", None)
-        await show_auto_video_chat_picker(query.message, context, "source")
-    elif data.startswith("av_src:"):
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        source_chat_id = data.split(":", 1)[1]
-        context.user_data["av_source_chat_id"] = source_chat_id
-        await show_auto_video_chat_picker(query.message, context, "target")
-    elif data.startswith("av_tgt:"):
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        target_chat_id = data.split(":", 1)[1]
-        source_chat_id = context.user_data.get("av_source_chat_id")
-        await create_auto_video_route_from_selection(query.message, context, source_chat_id, target_chat_id)
-    elif data == "av_cancel_setup":
-        context.user_data.pop("av_source_chat_id", None)
-        await query.message.reply_text("\u2705 Otomatik video kurulumu iptal edildi.")
-    elif data == "av_add":
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        context.user_data["mode"] = "add_auto_video_route"
-        await query.message.reply_text(
-            "Elle kurulum i\u00e7in kaynak ve hedef Chat ID yaz:\n\n"
-            "KaynakChatID | HedefChatID | Not\n\n"
-            "\u00d6rnek:\n"
-            "-1001111111111 | -1002222222222 | Video Depo -> Ana Kanal\n\n"
-            "Daha kolay yol: Otomatik Video men\u00fcs\u00fcnden Butonlu Kurulum'u kullan."
-        )
-    elif data.startswith("av_toggle_"):
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        route_id = int(data.split("_")[2])
-        row = supabase.table("auto_video_routes").select("*").eq("id", route_id).single().execute().data
-        if row:
-            supabase.table("auto_video_routes").update({"active": not bool(row.get("active"))}).eq("id", route_id).execute()
-            await log_event("auto_video_route_toggled", user_id, details=f"route_id={route_id}")
-        await query.message.reply_text("\u2705 Rota durumu degistirildi.")
-        await admin_auto_video_menu(query.message)
-    elif data.startswith("av_delete_"):
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        route_id = int(data.split("_")[2])
-        supabase.table("auto_video_routes").delete().eq("id", route_id).execute()
-        await log_event("auto_video_route_deleted", user_id, details=f"route_id={route_id}")
-        await query.message.reply_text("\u2705 Rota silindi.")
-    elif data == "admin_ai_summary":
-        await query.message.reply_text("AI genel gunluk ozet hazirlaniyor...")
-        summary = await ai_daily_business_summary()
-        await query.message.reply_text(f"\U0001f916 AI Gunluk Ozet\n\n{summary}")
-    elif data == "admin_channel_stats":
-        await channel_stats_message(query.message)
-    elif data == "admin_abandoned":
-        await abandoned_message(query.message)
-    elif data == "admin_users":
-        await users_message(query.message)
-    elif data == "admin_search_user":
-        context.user_data["mode"] = "search_user"
-        await query.message.reply_text(" Kullanici ID veya username yaz:")
-    elif data == "admin_coupons":
-        await query.message.reply_text("\U0001f39f\ufe0f Kupon sistemi su an kapali.")
-    elif data == "coupon_add":
-        await query.message.reply_text("\U0001f39f\ufe0f Kupon sistemi su an kapali.")
-    elif data.startswith("coupon_toggle_"):
-        cid = int(data.split("_")[2])
-        row = supabase.table("coupons").select("*").eq("id", cid).single().execute().data
-        if row:
-            supabase.table("coupons").update({"active": not bool(row.get("active"))}).eq("id", cid).execute()
-        await log_event("coupon_toggled", user_id, details=f"coupon_id={cid}")
-        await query.message.reply_text(" Kupon durumu degistirildi.")
-    elif data == "admin_campaign":
-        await campaign_message(query.message)
-    elif data == "campaign_start":
-        context.user_data["mode"] = "campaign_start"
-        await query.message.reply_text(" Kampanya baslat:\n\nIndirimYuzde | Saat\n\nOrnek:\n30 | 6")
-    elif data == "campaign_stop":
-        set_setting("campaign_enabled", "off")
-        await log_event("campaign_stopped", user_id)
-        await query.message.reply_text(" Kampanya kapatildi.")
-    elif data == "admin_referrals":
-        await referrals_admin_message(query.message)
-    elif data == "admin_giveaway":
-        await giveaway_admin_message(query.message)
-    elif data == "admin_pending_work":
-        await pending_work_message(query.message)
-    elif data == "admin_test_mode":
-        current = test_mode_on()
-        set_setting("test_mode", "off" if current else "on")
-        await log_event("test_mode_toggled", user_id, details="off" if current else "on")
-        await query.message.reply_text("Test modu degistirildi: " + ("KAPALI" if current else "ACIK"))
-    elif data == "admin_ads":
-        await ad_orders_admin_message(query.message)
-    elif data == "admin_ad_channel_prices":
-        await ad_channel_prices_admin_message(query.message)
-    elif data.startswith("adchprice_"):
-        if not can_manage(user_id):
-            await query.message.reply_text(" Yetkin yok."); return
-        context.user_data["mode"] = "edit_channel_ad_price"
-        context.user_data["channel_id"] = int(data.split("_")[1])
-        await query.message.reply_text("Bu kanal icin yeni reklam fiyatini Stars olarak yaz. Ornek: 1500")
-    elif data == "admin_ad_packages":
-        await query.message.reply_text("Reklam paketi sistemi kapatildi. Reklam fiyatlari kanal bazli ayarlaniyor.")
-    elif data == "admin_add_ad_package":
-        await query.message.reply_text("Reklam paketi sistemi kapatildi. Kullanici direkt kanal seciyor; fiyatlari Reklam Fiyatlari ekranindan kanal bazli ayarla.")
-    elif data == "admin_add_user_balance":
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok."); return
-        context.user_data["mode"] = "admin_add_user_balance"
-        await query.message.reply_text(
-            "\U0001f4b0 Kullan\u0131c\u0131ya bakiye y\xfckle\n\n"
-            "Format:\n"
-            "UserID | Tutar | Not\n\n"
-            "\xd6rnek:\n"
-            "957422314 | 2500 | manuel reklam bakiyesi\n\n"
-            "Bu i\u015flem kullan\u0131c\u0131n\u0131n reklam bakiyesine Stars ekler. Ger\xe7ek \xf6deme almaz; admin manuel ekleme yapm\u0131\u015f olur."
-        )
-    elif data == "admin_ad_balances":
-        await ad_balances_admin_message(query.message)
-    elif data == "admin_ad_stats":
-        await ad_stats_admin_message(query.message)
-    elif data == "admin_system_test":
-        await system_test_message(query.message, context)
-    elif data.startswith("ad_views_"):
-        context.user_data["mode"] = "ad_update_views"
-        context.user_data["ad_order_id"] = int(data.split("_")[2])
-        await query.message.reply_text("Goruntulenme sayisini yaz. Ornek: 1250")
-    elif data.startswith("ad_approve_"):
-        await approve_and_publish_ad(query.message, context, int(data.split("_")[2]), user_id)
-    elif data.startswith("ad_reject_"):
-        await reject_and_refund_ad(query.message, int(data.split("_")[2]), user_id)
-    elif data.startswith("adpkg_toggle_"):
-        await toggle_ad_package(query.message, int(data.split("_")[2]), user_id)
-    elif data.startswith("adpkg_price_"):
-        context.user_data["mode"] = "edit_ad_pkg_price"
-        context.user_data["ad_package_id"] = int(data.split("_")[2])
-        await query.message.reply_text("Yeni reklam paketi fiyatini Stars olarak yaz. Ornek: 1500")
-    elif data.startswith("adpkg_desc_"):
-        context.user_data["mode"] = "edit_ad_pkg_desc"
-        context.user_data["ad_package_id"] = int(data.split("_")[2])
-        await query.message.reply_text("Yeni reklam paketi aciklamasini yaz.")
-    elif data.startswith("adpkg_target_"):
-        context.user_data["mode"] = "edit_ad_pkg_target"
-        context.user_data["ad_package_id"] = int(data.split("_")[2])
-        await query.message.reply_text("Hedefi yaz:\nsingle | KanalID\nveya\nall | 0")
-    elif data.startswith("adpkg_delete_"):
-        await delete_ad_package(query.message, int(data.split("_")[2]), user_id)
-    elif data == "giveaway_run":
-        await run_giveaway(query.message, context, previous_week_key(), manual=True)
-    elif data == "admin_faq":
-        await faq_admin_message(query.message)
-    elif data == "faq_add":
-        context.user_data["mode"] = "add_faq"
-        await query.message.reply_text("SSS ekle:\n\nSoru | Cevap")
-    elif data.startswith("faq_toggle_"):
-        fid = int(data.split("_")[2])
-        row = supabase.table("faq").select("*").eq("id", fid).single().execute().data
-        if row:
-            supabase.table("faq").update({"active": not bool(row.get("active"))}).eq("id", fid).execute()
-        await query.message.reply_text(" SSS durumu degistirildi.")
-    elif data == "admin_broadcast":
-        context.user_data["mode"] = "broadcast"
-        await query.message.reply_text(" Tum kullanicilara gondermek istedigin duyuruyu yaz:")
-    elif data == "admin_channel_id_help":
-        await query.message.reply_text(" Grup/Kanal ID alma:\n\n1. Botu VIP grup/kanala yonetici yap.\n2. Mesaj gonder, kullanici davet et ve kullanici yasakla yetkilerini ac.\n3. VIP grup/kanal icine duz mesaj olarak sadece id yaz.\n4. Bot -100 ile baslayan Chat ID verir.")
-    elif data == "admin_support":
-        await support_requests_message(query.message)
-    elif data == "admin_cancel":
-        await cancel_requests_message(query.message)
-    elif data == "admin_blacklist":
-        await blacklist_message(query.message)
-    elif data == "admin_admins":
-        await admins_message(query.message)
-    elif data == "admin_add_admin":
-        if not is_owner(user_id):
-            await query.message.reply_text(" Sadece owner admin ekleyebilir."); return
-        context.user_data["mode"] = "add_admin"
-        await query.message.reply_text(" Admin ekle:\n\nUserID | role\n\nRole: manager veya viewer\n\nCikmak icin: iptal")
-    elif data.startswith("admin_toggle_"):
-        if not is_owner(user_id):
-            await query.message.reply_text(" Yetkin yok."); return
-        tid = int(data.split("_")[2])
-        row = supabase.table("admins").select("*").eq("user_id", tid).single().execute().data
-        if row:
-            supabase.table("admins").update({"active": not bool(row.get("active"))}).eq("user_id", tid).execute()
-        await log_event("admin_toggled", user_id, target_user_id=tid)
-        await query.message.reply_text(" Admin durumu degistirildi.")
-    elif data == "admin_logs":
-        await logs_message(query.message)
-    elif data == "admin_export_sales":
-        await export_sales_csv(query.message)
-    elif data == "admin_maintenance":
-        set_setting("maintenance", "off" if maintenance_on() else "on")
-        await log_event("maintenance_toggled", user_id)
-        await query.message.reply_text(" Bakim modu degistirildi.")
-    elif data.startswith("ch_"):
-        await handle_channel_admin_button(query, context)
-    elif data.startswith("pkg_"):
-        await handle_package_admin_button(query, context)
-    elif data.startswith("grant_user_"):
-        await show_channels_for_grant(query.message, int(data.split("_")[2]))
-    elif data.startswith("grant_channel_"):
-        parts = data.split("_")
-        await show_grant_duration(query.message, int(parts[2]), int(parts[3]))
-    elif data.startswith("grant_days_"):
-        parts = data.split("_")
-        await grant_vip_to_user(query.message, context, int(parts[2]), int(parts[3]), custom_days=int(parts[4]))
-    elif data.startswith("grant_custom_"):
-        parts = data.split("_")
-        context.user_data["mode"] = "custom_grant_days"
-        context.user_data["target_user_id"] = int(parts[2])
-        context.user_data["channel_id"] = int(parts[3])
-        await query.message.reply_text(" Kac gunluk VIP vermek istiyorsun? Ornek: 14")
-    elif data.startswith("user_balance_"):
-        if not can_manage(user_id):
-            await query.message.reply_text("\u274c Yetkin yok.")
-            return
-        target_id = int(data.split("_")[2])
-        context.user_data["mode"] = "admin_add_balance_amount"
-        context.user_data["target_user_id"] = target_id
-        current_balance = await get_ad_balance(target_id)
-        await query.message.reply_text(
-            f"\U0001f4b0 Kullan\u0131c\u0131ya bakiye y\xfckle\n\n"
-            f"Kullan\u0131c\u0131 ID: {target_id}\n"
-            f"Mevcut bakiye: {current_balance} Stars\n\n"
-            "Eklenecek tutar\u0131 yaz. \xd6rnek: 2500"
-        )
-    elif data.startswith("userdetail_"):
-        await show_user_detail_by_id(query.message, int(data.split("_")[1]))
-    elif data.startswith("usub_cancel_"):
-        await admin_cancel_subscription(query.message, context, int(data.split("_")[2]))
-    elif data.startswith("usub_link_"):
-        await admin_resend_link_for_subscription(query.message, context, int(data.split("_")[2]))
-    elif data.startswith("usub_extend_"):
-        parts = data.split("_")
-        await admin_extend_subscription(query.message, int(parts[2]), int(parts[3]))
-    elif data.startswith("refund_sale_"):
-        await mark_refund(query.message, user_id, int(data.split("_")[2]))
-    elif data.startswith("blacklist_"):
-        tid = int(data.split("_")[1])
-        context.user_data["mode"] = "blacklist_reason"
-        context.user_data["target_user_id"] = tid
-        await query.message.reply_text(" Kara liste sebebini yaz:")
-    elif data.startswith("unblacklist_"):
-        tid = int(data.split("_")[1])
-        supabase.table("blacklist").update({"active": False}).eq("user_id", tid).execute()
-        await log_event("unblacklisted", user_id, target_user_id=tid)
-        await query.message.reply_text(" Kullanici kara listeden cikarildi.")
-
-# =========================================================
-# CHANNEL/PACKAGE ADMIN
-# =========================================================
-
-async def handle_channel_admin_button(query, context):
-    if not can_manage(query.from_user.id):
-        await query.message.reply_text(" Yetkin yok."); return
-    data = query.data
-    if data.startswith("ch_delete_"):
-        cid = int(data.split("_")[2])
-        supabase.table("channels").delete().eq("id", cid).execute()
-        await log_event("channel_deleted", query.from_user.id, channel_id=cid)
-        await query.message.reply_text(" Kanal silindi.")
-    elif data.startswith("ch_toggle_"):
-        cid = int(data.split("_")[2])
-        row = supabase.table("channels").select("*").eq("id", cid).single().execute().data
-        if row:
-            supabase.table("channels").update({"active": not bool(row.get("active"))}).eq("id", cid).execute()
-        await query.message.reply_text(" Kanal aktif/pasif degistirildi.")
-    else:
-        parts = data.split("_")
-        action, cid = parts[1], int(parts[2])
-        maps = {
-            "name": ("edit_name", "\u270f\ufe0f Yeni kanal adini yaz. Ornek: Pasha VIP"),
-            "price": ("edit_price", " Yeni fiyati yaz. Ornek: 3000"),
-            "duration": ("edit_duration", " Yeni sureyi gun olarak yaz. Ornek: 60"),
-            "chat": ("edit_chat", " Yeni Chat ID yaz. Ornek: -1001234567890"),
-            "description": ("edit_description", " Yeni aciklamayi yaz."),
-            "photo": ("edit_photo", " Gorsel URL yaz. Bos birakmak icin - yaz."),
-        }
-        mode, prompt = maps[action]
-        context.user_data["mode"] = mode
-        context.user_data["channel_id"] = cid
-        await query.message.reply_text(prompt)
-
-
-async def handle_package_admin_button(query, context):
-    if not can_manage(query.from_user.id):
-        await query.message.reply_text(" Yetkin yok."); return
-    data = query.data
-    if data.startswith("pkg_delete_"):
-        pid = int(data.split("_")[2])
-        supabase.table("packages").delete().eq("id", pid).execute()
-        await query.message.reply_text(" Paket silindi.")
-    elif data.startswith("pkg_toggle_"):
-        pid = int(data.split("_")[2])
-        row = supabase.table("packages").select("*").eq("id", pid).single().execute().data
-        if row:
-            supabase.table("packages").update({"active": not bool(row.get("active"))}).eq("id", pid).execute()
-        await query.message.reply_text(" Paket aktif/pasif degistirildi.")
-
-
-async def list_channels_manage(message):
-    rows = supabase.table("channels").select("*").order("id").execute().data or []
-    if not rows:
-        await message.reply_text(" Henuz kanal yok."); return
-    for ch in rows:
-        status = "Aktif " if ch.get("active") else "Pasif "
-        kb = [
-            [InlineKeyboardButton("\u270f\ufe0f Ad", callback_data=f"ch_name_{ch['id']}"), InlineKeyboardButton(" Fiyat", callback_data=f"ch_price_{ch['id']}")],
-            [InlineKeyboardButton(" Sure", callback_data=f"ch_duration_{ch['id']}")],
-            [InlineKeyboardButton(" Chat ID", callback_data=f"ch_chat_{ch['id']}"), InlineKeyboardButton(" Aciklama", callback_data=f"ch_description_{ch['id']}")],
-            [InlineKeyboardButton(" Gorsel", callback_data=f"ch_photo_{ch['id']}"), InlineKeyboardButton("Ac/Kapat", callback_data=f"ch_toggle_{ch['id']}")],
-            [InlineKeyboardButton(" Sil", callback_data=f"ch_delete_{ch['id']}")],
-        ]
-        await message.reply_text(
-            f" Kanal\n\nID: {ch['id']}\nAd: {ch.get('name')}\nFiyat: {ch.get('price')} \nSure: {ch.get('duration_days')} gun\nChat ID: {ch.get('chat_id')}\nDurum: {status}\nAciklama: {ch.get('description') or '-'}",
-            reply_markup=InlineKeyboardMarkup(kb),
-        )
-
-
-async def list_packages_manage(message):
-    rows = supabase.table("packages").select("*").order("id").execute().data or []
-    if not rows:
-        await message.reply_text(" Henuz paket yok."); return
-    for p in rows:
-        status = "Aktif " if p.get("active") else "Pasif "
-        kb = [[InlineKeyboardButton("Ac/Kapat", callback_data=f"pkg_toggle_{p['id']}"), InlineKeyboardButton(" Sil", callback_data=f"pkg_delete_{p['id']}")]]
-        await message.reply_text(
-            f" Paket\n\nID: {p['id']}\nAd: {p.get('name')}\nFiyat: {p.get('price')} \nSure: {p.get('duration_days')} gun\nKanallar: {p.get('channel_ids')}\nDurum: {status}\nAciklama: {p.get('description') or '-'}",
-            reply_markup=InlineKeyboardMarkup(kb),
-        )
-
-# =========================================================
-# SUBSCRIPTIONS / GRANT / HISTORY
-# =========================================================
-
-async def upsert_subscription(user_id, channel_id, duration_days, price):
-    current = now_utc()
-    existing = (
-        supabase.table("subscriptions")
-        .select("*")
-        .eq("user_id", int(user_id))
-        .eq("channel_id", int(channel_id))
-        .eq("status", "active")
-        .execute()
-    )
-    if existing.data:
-        sub = existing.data[0]
-        old_end = parse_dt(sub.get("end_date")) or current
-        base = old_end if old_end > current else current
-        new_end = base + timedelta(days=int(duration_days))
-        supabase.table("subscriptions").update(
-            {
-                "end_date": new_end.isoformat(),
-                "price": int(price),
-                "status": "active",
-                "warn_3d_sent": False,
-                "warn_1d_sent": False,
-                "link_resend_count": 0,
-            }
-        ).eq("id", sub["id"]).execute()
-        return sub.get("start_date"), new_end.isoformat()
-    start = current
-    end = start + timedelta(days=int(duration_days))
-    supabase.table("subscriptions").insert(
-        {
-            "user_id": int(user_id),
-            "channel_id": int(channel_id),
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-            "status": "active",
-            "price": int(price),
-            "warn_3d_sent": False,
-            "warn_1d_sent": False,
-            "link_resend_count": 0,
-        }
-    ).execute()
-    return start.isoformat(), end.isoformat()
-
-
-async def grant_vip_to_user(message, context, target_user_id, channel_id, custom_days=None):
-    ch = await get_channel(channel_id)
-    if not ch:
-        await message.reply_text(" Kanal bulunamadi."); return
-    days = int(custom_days or ch.get("duration_days") or DEFAULT_DURATION_DAYS)
-    start_date, end_date = await upsert_subscription(target_user_id, channel_id, days, 0)
-    vip_link = await safe_create_and_store_link(context, target_user_id, channel_id, ch)
-    supabase.table("sales").insert({"user_id": target_user_id, "username": "manual_admin", "channel_id": channel_id, "price": 0, "payment_payload": "manual_admin_grant", "coupon_code": None, "refund_status": "none"}).execute()
-    await log_event("vip_granted", message.chat_id, target_user_id, channel_id, f"{days} gun")
-    if vip_link:
-        try:
-            await context.bot.send_message(target_user_id, f" Admin sana VIP erisim verdi!\n\n Kanal: {ch.get('name')}\n Tek kullanimlik giris linkin:\n{vip_link}\n\nBaslangic: {start_date}\nBitis: {end_date}")
-            await message.reply_text(" VIP yetki verildi ve link kullaniciya gonderildi.")
-        except Exception:
-            await message.reply_text(f" VIP yetki verildi ama kullaniciya mesaj gonderilemedi. Linki manuel gonder:\n{vip_link}")
-    else:
-        await message.reply_text(" VIP yetki verildi ama davet linki uretilemedi. Botun grupta/kanalda admin oldugundan emin ol.")
-
-
-async def show_my_subscriptions(message, user_id):
-    rows = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
-    if not rows:
-        await message.reply_text("\U0001f4c5 Aktif \xfcyelik bulunamad\u0131.")
-        return
-
-    await message.reply_text(
-        "\U0001f4c5 \xdcyeli\u011fim\n\n"
-        "Aktif aboneliklerini buradan y\xf6netebilirsin.\n"
-        "Yeni giri\u015f linki hakk\u0131n her abonelik i\xe7in en fazla 2 kezdir.\n"
-        "\u0130ptal talebi de sadece bu ekrandaki abonelik kart\u0131ndan yap\u0131l\u0131r."
-    )
-
-    for sub in rows:
-        ch = await get_channel(sub["channel_id"])
-        name = ch.get("name") if ch else f"Kanal ID {sub['channel_id']}"
-        used_links = safe_int(sub.get("link_resend_count"), 0)
-        remaining_links = max(0, MAX_USER_LINK_RESENDS - used_links)
-
-        kb = [[InlineKeyboardButton("\u2b50 Bu \xfcyeli\u011fi uzat", callback_data=f"buyc_{sub['channel_id']}")]]
-
-        action_row = []
-        if remaining_links > 0:
-            action_row.append(InlineKeyboardButton(f"\U0001f517 Yeni link ({remaining_links} hak)", callback_data=f"resend_{sub['id']}"))
-        action_row.append(InlineKeyboardButton("\u274c \u0130ptal talebi", callback_data=f"request_cancel_{sub['id']}"))
-        kb.append(action_row)
-
-        await message.reply_text(
-            f"\u2705 Aktif \xfcyeli\u011fin:\n\n"
-            f"\U0001f4e2 Kanal: {name}\n"
-            f"Ba\u015flang\u0131\xe7: {sub.get('start_date')}\n"
-            f"Biti\u015f: {sub.get('end_date')}\n"
-            f"Durum: {sub.get('status')}\n"
-            f"Yeni link hakk\u0131: {remaining_links}/{MAX_USER_LINK_RESENDS}",
-            reply_markup=InlineKeyboardMarkup(kb),
-        )
-
-async def my_history(message, user_id):
-    sales = supabase.table("sales").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
-    subs = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
-    text = " Gecmisin\n\n"
-    text += "Satin almalar:\n" if sales else "Satin alma gecmisi yok.\n"
-    for s in sales:
-        ch = await get_channel(s.get("channel_id")) if s.get("channel_id") else None
-        name = ch.get("name") if ch else f"Kanal ID {s.get('channel_id')}"
-        text += f"- {name} | {s.get('price')} Stars | {s.get('created_at')}\n"
-    text += "\nUyelikler:\n" if subs else "\nUyelik gecmisi yok."
-    for sub in subs:
-        ch = await get_channel(sub.get("channel_id"))
-        name = ch.get("name") if ch else f"Kanal ID {sub.get('channel_id')}"
-        text += f"- {name} | {sub.get('status')} | Bitis: {sub.get('end_date')}\n"
-    await message.reply_text(text[:3900])
-
-# =========================================================
-# PAYMENTS / COUPONS / CAMPAIGN
-# =========================================================
-
-async def get_coupon(code):
-    if not code:
-        return None
-    res = supabase.table("coupons").select("*").eq("code", code.upper()).execute()
-    return res.data[0] if res.data else None
-
-
-async def calculate_price(user_id, base_price, channel_id=None):
-    """Kupon sistemi su an kapali. Sadece genel kampanya indirimi uygulanir."""
-    price = max(1, int(base_price))
-    camp = active_campaign_percent()
-    discount_text = None
-    if camp:
-        price = max(1, int(price * (100 - camp) / 100))
-        discount_text = f"%{camp} kampanya indirimi"
-    return max(1, price), None, discount_text
-
-
-async def create_checkout_intent(user, item_type, item_id, price, payload):
-    try:
-        supabase.table("checkout_intents").insert({"user_id": user.id, "username": safe_username(user), "item_type": item_type, "item_id": item_id, "price": price, "payload": payload, "status": "started", "reminder_sent": False}).execute()
-    except Exception as e:
-        logger.warning("Checkout kaydedilemedi: %s", e)
-
-
-async def handle_buy_channel(query, context):
-    if maintenance_on() and not is_admin(query.from_user.id):
-        await query.message.reply_text(" Bot bakim modunda. Satin alma gecici olarak kapali."); return
-    if await is_blacklisted(query.from_user.id) and not is_admin(query.from_user.id):
-        await query.message.reply_text(" Satin alma yetkin kisitlandi."); return
-    channel_id = int(query.data.split("_")[1])
+async def buy_channel(query, context):
+    channel_id = safe_int(query.data.split("_")[1])
     ch = await get_channel(channel_id)
     if not ch or not ch.get("active"):
-        await query.message.reply_text(" Kanal bulunamadi veya pasif."); return
-    price, coupon_code, _ = await calculate_price(query.from_user.id, int(ch.get("price") or 1), channel_id)
-    payload = f"channel_{channel_id}_{price}_{coupon_code or 'NONE'}_{ab_variant(query.from_user.id)}"
-    await create_checkout_intent(query.from_user, "channel", channel_id, price, payload)
-    await context.bot.send_invoice(chat_id=query.message.chat_id, title=f"{ch.get('name')} VIP Uyelik", description=f"{ch.get('duration_days') or DEFAULT_DURATION_DAYS} gunluk VIP uyelik.", payload=payload, provider_token="", currency="XTR", prices=[LabeledPrice(label=ch.get("name"), amount=price)])
-
-
-async def handle_buy_package(query, context):
-    package_id = int(query.data.split("_")[1])
-    p = await get_package(package_id)
-    if not p or not p.get("active"):
-        await query.message.reply_text(" Paket bulunamadi veya pasif."); return
-    price, coupon_code, _ = await calculate_price(query.from_user.id, int(p.get("price") or 1), None)
-    payload = f"package_{package_id}_{price}_{coupon_code or 'NONE'}_{ab_variant(query.from_user.id)}"
-    await create_checkout_intent(query.from_user, "package", package_id, price, payload)
-    await context.bot.send_invoice(chat_id=query.message.chat_id, title=f"{p.get('name')} VIP Paket", description=f"{p.get('duration_days') or DEFAULT_DURATION_DAYS} gunluk paket.", payload=payload, provider_token="", currency="XTR", prices=[LabeledPrice(label=p.get("name"), amount=price)])
+        await query.message.reply_text("â Kanal aktif deÄil.")
+        return
+    price = safe_int(ch.get("price"), 0)
+    if price < 1:
+        await query.message.reply_text("â Kanal fiyatÄ± hatalÄ±.")
+        return
+    payload = f"vip_{channel_id}_{price}"
+    try:
+        supabase.table("checkout_intents").insert({
+            "user_id": query.from_user.id,
+            "username": username_of(query.from_user),
+            "item_type": "vip",
+            "item_id": channel_id,
+            "price": price,
+            "payload": payload,
+            "status": "started",
+        }).execute()
+    except Exception:
+        pass
+    await context.bot.send_invoice(
+        chat_id=query.message.chat_id,
+        title=f"{ch.get('name')} VIP Ãyelik",
+        description=f"{safe_int(ch.get('duration_days'), DEFAULT_DURATION_DAYS)} gÃ¼nlÃ¼k VIP Ã¼yelik.",
+        payload=payload,
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label=ch.get("name") or "VIP", amount=price)],
+    )
 
 
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2817,1133 +666,361 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = update.message.successful_payment.invoice_payload
     user = update.effective_user
-    if payload.startswith("topup_"):
-        amount = int(payload.split("_", 1)[1])
-        await change_ad_balance(user.id, amount, "topup", "Stars bakiye yukleme")
-        await log_event("ad_balance_topup", user.id, user.id, details=f"{amount} Stars")
-        await update.message.reply_text(f" Bakiye yuklendi: {amount} Stars\n\nGuncel bakiye: {await get_ad_balance(user.id)} Stars")
-        await context.bot.send_message(OWNER_ID, f" Yeni reklam bakiyesi yukleme\n\nKullanici: @{safe_username(user) or 'yok'}\nID: {user.id}\nTutar: {amount} Stars")
+    if payload.startswith("adtopup_"):
+        amount = safe_int(payload.split("_")[1])
+        add_balance(user.id, amount, "Telegram Stars bakiye yÃ¼kleme")
+        bal, _ = get_balance(user.id)
+        await update.message.reply_text(f"â Bakiye yÃ¼klendi: {amount} Stars\nGÃ¼ncel bakiye: {bal} Stars")
         return
-    parts = payload.split("_", 4)
-    item_type, item_id, paid_price = parts[0], int(parts[1]), int(parts[2])
-    coupon_code = parts[3] if len(parts) > 3 and parts[3] != "NONE" else None
-    variant = parts[4] if len(parts) > 4 else ab_variant(user.id)
-    links = []
-    sale_channel_id = None
-    package_id = None
-    item_name = "VIP"
-    duration = DEFAULT_DURATION_DAYS
-    if item_type == "channel":
-        ch = await get_channel(item_id)
+
+    if payload.startswith("vip_"):
+        parts = payload.split("_")
+        channel_id = safe_int(parts[1])
+        price = safe_int(parts[2])
+        ch = await get_channel(channel_id)
         if not ch:
-            await update.message.reply_text(" Odeme alindi ama kanal bulunamadi. Admin ile iletisime gec."); return
-        sale_channel_id = item_id
-        item_name = ch.get("name")
-        duration = int(ch.get("duration_days") or DEFAULT_DURATION_DAYS)
-        start_date, end_date = await upsert_subscription(user.id, item_id, duration, paid_price)
-        link = await safe_create_and_store_link(context, user.id, item_id, ch)
-        if link:
-            links.append((item_name, link))
-    else:
-        p = await get_package(item_id)
-        if not p:
-            await update.message.reply_text(" Odeme alindi ama paket bulunamadi. Admin ile iletisime gec."); return
-        package_id = item_id
-        item_name = p.get("name")
-        duration = int(p.get("duration_days") or DEFAULT_DURATION_DAYS)
-        for cid in parse_channel_ids(p.get("channel_ids")):
-            ch = await get_channel(cid)
-            if not ch:
-                continue
-            sale_channel_id = cid
-            start_date, end_date = await upsert_subscription(user.id, cid, duration, paid_price)
-            link = await safe_create_and_store_link(context, user.id, cid, ch)
-            if link:
-                links.append((ch.get("name"), link))
-    supabase.table("sales").insert({"user_id": user.id, "username": safe_username(user), "channel_id": sale_channel_id, "package_id": package_id, "price": paid_price, "payment_payload": payload, "coupon_code": coupon_code, "refund_status": "none", "ab_variant": variant}).execute()
-    supabase.table("checkout_intents").update({"status": "paid"}).eq("payload", payload).execute()
-    if coupon_code:
-        coupon = await get_coupon(coupon_code)
-        if coupon:
-            supabase.table("coupons").update({"used_count": int(coupon.get("used_count") or 0) + 1}).eq("id", coupon["id"]).execute()
-        supabase.table("users").update({"active_coupon": None}).eq("user_id", user.id).execute()
-    await handle_referral_purchase_bonus(context, user.id)
-    await log_event("payment_success", user.id, user.id, sale_channel_id, f"{paid_price} Stars")
-    await context.bot.send_message(OWNER_ID, f" Yeni satis!\n\nKullanici: @{safe_username(user) or 'yok'}\nUser ID: {user.id}\nUrun: {item_name}\nFiyat: {paid_price} Stars\nKupon: {coupon_code or 'Yok'}")
-    if links:
-        link_text = "\n\n".join([f" {name}\n {link}" for name, link in links])
-        await update.message.reply_text(f" Odeme basarili!\n\n{link_text}\n\n Linkler {INVITE_LINK_EXPIRE_MINUTES} dakika gecerlidir ve tek kullanimliktir.")
-    else:
-        await update.message.reply_text(" Odeme basarili fakat otomatik davet linki uretilemedi. Admin ile iletisime gec.")
-
-# =========================================================
-# REFERRALS / GIVEAWAY
-# =========================================================
-
-
-async def add_referral_points(referrer_id, referred_id, points, event_type):
-    """Add referral points safely even if an older SQL schema is installed."""
-    week = current_week_key()
-    pts = int(points or 0)
-    if not referrer_id or pts <= 0:
-        return
-
-    try:
-        supabase.table("referral_events").insert({
-            "referrer_id": int(referrer_id),
-            "referred_id": int(referred_id) if referred_id else None,
-            "points": pts,
-            "event_type": event_type,
-            "week_key": week,
-        }).execute()
-    except Exception as e:
-        logger.warning("referral_events week_key insert failed, fallback: %s", e)
+            await update.message.reply_text("â Ãdeme alÄ±ndÄ± ama kanal bulunamadÄ±. Admin ile iletiÅime geÃ§.")
+            return
+        start_date, end_date = await upsert_subscription(user.id, channel_id, safe_int(ch.get("duration_days"), DEFAULT_DURATION_DAYS), price)
+        link = await create_and_store_invite(context, user.id, channel_id, ch)
         try:
-            supabase.table("referral_events").insert({
-                "referrer_id": int(referrer_id),
-                "referred_id": int(referred_id) if referred_id else None,
-                "points": pts,
-                "event_type": event_type,
+            supabase.table("sales").insert({
+                "user_id": user.id,
+                "username": username_of(user),
+                "channel_id": channel_id,
+                "price": price,
+                "payment_payload": payload,
             }).execute()
-        except Exception as e2:
-            logger.warning("referral_events insert failed: %s", e2)
-
-    row = await get_user_row(referrer_id)
-    if not row:
-        return
-
-    current_points = int(row.get("referral_points") or 0)
-    current_total = int(row.get("referral_total_points") or row.get("referral_entries") or current_points or 0)
-    current_entries = int(row.get("referral_entries") or 0)
-
-    payload = {"referral_points": current_points + pts}
-    if "referral_total_points" in row:
-        payload["referral_total_points"] = current_total + pts
-    if "referral_entries" in row:
-        payload["referral_entries"] = current_entries + pts
-
-    try:
-        supabase.table("users").update(payload).eq("user_id", int(referrer_id)).execute()
-    except Exception as e:
-        logger.warning("referral user update failed, minimal fallback: %s", e)
+            supabase.table("checkout_intents").update({"status": "paid"}).eq("payload", payload).execute()
+        except Exception:
+            pass
+        if link:
+            await update.message.reply_text(
+                f"â Ãdeme baÅarÄ±lÄ±!\n\nð¢ Kanal: {ch.get('name')}\nð Tek kullanÄ±mlÄ±k giriÅ linkin:\n{link}\n\nBitiÅ: {end_date}"
+            )
+        else:
+            await update.message.reply_text("â Ãdeme baÅarÄ±lÄ± ama link Ã¼retilemedi. Admin ile iletiÅime geÃ§.")
         try:
-            supabase.table("users").update({"referral_points": current_points + pts}).eq("user_id", int(referrer_id)).execute()
-        except Exception as e2:
-            logger.warning("minimal referral update failed: %s", e2)
+            await context.bot.send_message(OWNER_ID, f"â Yeni VIP satÄ±Å\nKullanÄ±cÄ±: {user.id}\nKanal: {ch.get('name')}\nFiyat: {price} Stars")
+        except Exception:
+            pass
 
-async def handle_referral_purchase_bonus(context, buyer_id):
-    row = await get_user_row(buyer_id)
-    if not row or not row.get("referrer_id") or row.get("referral_purchase_reward_given"):
-        return
-    referrer_id = int(row["referrer_id"])
-    pts = get_referral_purchase_points()
-    await add_referral_points(referrer_id, buyer_id, pts, "purchase")
-    supabase.table("users").update({"referral_purchase_reward_given": True}).eq("user_id", buyer_id).execute()
-    bonus_days = get_referral_bonus_days()
-    await extend_first_active_or_default_subscription(context, referrer_id, bonus_days)
+
+async def upsert_subscription(user_id, channel_id, days, price):
+    now = now_utc()
+    rows = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("channel_id", int(channel_id)).eq("status", "active").execute().data or []
+    if rows:
+        sub = rows[0]
+        old_end = parse_dt(sub.get("end_date")) or now
+        base = old_end if old_end > now else now
+        new_end = base + timedelta(days=days)
+        supabase.table("subscriptions").update({
+            "end_date": new_end.isoformat(),
+            "price": price,
+            "link_resend_count": 0,
+            "warn_3d_sent": False,
+            "warn_1d_sent": False,
+        }).eq("id", sub["id"]).execute()
+        return sub.get("start_date"), new_end.isoformat()
+    end = now + timedelta(days=days)
+    supabase.table("subscriptions").insert({
+        "user_id": int(user_id),
+        "channel_id": int(channel_id),
+        "start_date": now.isoformat(),
+        "end_date": end.isoformat(),
+        "status": "active",
+        "price": price,
+        "link_resend_count": 0,
+    }).execute()
+    return now.isoformat(), end.isoformat()
+
+
+async def create_and_store_invite(context, user_id, channel_id, ch):
     try:
-        await context.bot.send_message(referrer_id, f"Referansin ilk satin almayi yapti! +{pts} puan ve +{bonus_days} gun bonus kazandin.")
-    except Exception:
-        pass
-
-
-async def extend_first_active_or_default_subscription(context, user_id, days):
-    active = supabase.table("subscriptions").select("*").eq("user_id", user_id).eq("status", "active").limit(1).execute().data or []
-    if active:
-        sub = active[0]
-        await admin_extend_subscription_simple(sub["id"], days)
-        return sub.get("channel_id")
-    ch = await get_first_active_channel()
-    if not ch:
+        if not ch.get("chat_id"):
+            return None
+        expire = int((now_utc() + timedelta(minutes=INVITE_LINK_EXPIRE_MINUTES)).timestamp())
+        invite = await context.bot.create_chat_invite_link(
+            chat_id=int(ch.get("chat_id")),
+            name=f"{ch.get('name')} - {user_id}",
+            expire_date=expire,
+            member_limit=1,
+        )
+        link = invite.invite_link
+        supabase.table("subscriptions").update({"generated_invite_link": link}).eq("user_id", int(user_id)).eq("channel_id", int(channel_id)).eq("status", "active").execute()
+        return link
+    except Exception as e:
+        logger.error("invite error: %s", e)
         return None
-    await upsert_subscription(user_id, ch["id"], days, 0)
-    link = await safe_create_and_store_link(context, user_id, ch["id"], ch)
+
+
+async def show_my_subscriptions(message, user_id):
+    rows = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
+    if not rows:
+        await message.reply_text("ð Aktif Ã¼yeliÄin yok.")
+        return
+    for sub in rows:
+        ch = await get_channel(sub.get("channel_id"))
+        name = ch.get("name") if ch else f"Kanal ID {sub.get('channel_id')}"
+        used = safe_int(sub.get("link_resend_count"), 0)
+        left = max(0, MAX_LINK_RESENDS - used)
+        kb = []
+        row = []
+        if left > 0:
+            row.append(InlineKeyboardButton(f"ð Link GÃ¶nder ({left}/2)", callback_data=f"resend_{sub['id']}"))
+        row.append(InlineKeyboardButton("â Ä°ptal Talebi", callback_data=f"cancelreq_{sub['id']}"))
+        kb.append(row)
+        kb.append([InlineKeyboardButton("â­ ÃyeliÄi Uzat", callback_data=f"buych_{sub['channel_id']}")])
+        await message.reply_text(
+            f"ð Aktif Ãyelik\n\nð¢ {name}\nDurum: {sub.get('status')}\nBitiÅ: {sub.get('end_date')}\nYeni link hakkÄ±: {left}/2",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+
+
+async def resend_link(query, context):
+    sub_id = safe_int(query.data.split("_")[1])
+    sub = await get_subscription(sub_id)
+    if not sub or int(sub.get("user_id")) != int(query.from_user.id) or sub.get("status") != "active":
+        await query.message.reply_text("â Aktif Ã¼yelik bulunamadÄ±.")
+        return
+    used = safe_int(sub.get("link_resend_count"), 0)
+    if used >= MAX_LINK_RESENDS:
+        await query.message.reply_text("â Yeni link hakkÄ±n bitti. Admin ile iletiÅime geÃ§ebilirsin.")
+        return
+    ch = await get_channel(sub.get("channel_id"))
+    link = await create_and_store_invite(context, sub.get("user_id"), sub.get("channel_id"), ch)
+    if not link:
+        await query.message.reply_text("â Link Ã¼retilemedi. Botun kanalda admin olduÄundan emin ol.")
+        return
+    supabase.table("subscriptions").update({"link_resend_count": used + 1}).eq("id", sub_id).execute()
+    await query.message.reply_text(f"ð Yeni tek kullanÄ±mlÄ±k linkin:\n{link}\n\nKalan hakkÄ±n: {MAX_LINK_RESENDS - used - 1}/2")
+
+
+async def request_cancel(query, context):
+    sub_id = safe_int(query.data.split("_")[1])
+    sub = await get_subscription(sub_id)
+    if not sub or int(sub.get("user_id")) != int(query.from_user.id):
+        await query.message.reply_text("â Ãyelik bulunamadÄ±.")
+        return
+    existing = supabase.table("cancel_requests").select("*").eq("user_id", sub.get("user_id")).eq("channel_id", sub.get("channel_id")).eq("status", "pending").execute().data or []
+    if existing:
+        await query.message.reply_text("â ï¸ Zaten bekleyen iptal talebin var.")
+        return
+    supabase.table("cancel_requests").insert({"user_id": sub.get("user_id"), "channel_id": sub.get("channel_id"), "status": "pending"}).execute()
+    await query.message.reply_text("â Ä°ptal talebin admin onayÄ±na gÃ¶nderildi.")
     try:
-        await context.bot.send_message(user_id, f" Bonus VIP kazandin!\n\n {ch.get('name')}\n {link or 'Link uretilemedi, admin ile iletisime gec.'}")
+        await context.bot.send_message(OWNER_ID, f"â Yeni iptal talebi\nUser ID: {sub.get('user_id')}\nKanal ID: {sub.get('channel_id')}")
     except Exception:
         pass
-    return ch["id"]
 
+
+async def remove_user_from_channel(context, ch, user_id):
+    try:
+        if not ch or not ch.get("chat_id"):
+            return False
+        await context.bot.ban_chat_member(chat_id=int(ch.get("chat_id")), user_id=int(user_id))
+        await context.bot.unban_chat_member(chat_id=int(ch.get("chat_id")), user_id=int(user_id), only_if_banned=True)
+        return True
+    except Exception as e:
+        logger.error("remove user error: %s", e)
+        return False
+
+
+async def expire_subscriptions_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        rows = supabase.table("subscriptions").select("*").eq("status", "active").execute().data or []
+    except Exception as e:
+        logger.error("expire fetch error: %s", e)
+        return
+    now = now_utc()
+    for sub in rows:
+        end = parse_dt(sub.get("end_date"))
+        if not end or end > now:
+            continue
+        ch = await get_channel(sub.get("channel_id"))
+        removed = await remove_user_from_channel(context, ch, sub.get("user_id"))
+        try:
+            supabase.table("subscriptions").update({"status": "expired"}).eq("id", sub.get("id")).execute()
+        except Exception:
+            pass
+        try:
+            await context.bot.send_message(sub.get("user_id"), "â VIP Ã¼yelik sÃ¼ren bitti. Yenilemek iÃ§in VIP Kanallar bÃ¶lÃ¼mÃ¼nÃ¼ kullanabilirsin.")
+        except Exception:
+            pass
+        await log_event("subscription_expired", None, sub.get("user_id"), sub.get("channel_id"), f"removed={removed}")
+
+# =========================
+# USER STATUS / HISTORY / REF
+# =========================
+async def user_status_message(message, user_id):
+    bal, spent = get_balance(user_id)
+    active_subs = supabase.table("subscriptions").select("*").eq("user_id", int(user_id)).eq("status", "active").execute().data or []
+    pending_ads = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).eq("status", "pending").execute().data or []
+    await message.reply_text(
+        f"ð Durumum\n\n"
+        f"ð Aktif Ã¼yelik: {len(active_subs)}\n"
+        f"ð° Reklam bakiyesi: {bal} Stars\n"
+        f"ð¸ Harcanan reklam bakiyesi: {spent} Stars\n"
+        f"ð£ Bekleyen reklam: {len(pending_ads)}"
+    )
+
+
+async def my_history(message, user_id):
+    sales = supabase.table("sales").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
+    ads = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
+    text = "ð GeÃ§miÅim\n\n"
+    text += "â­ VIP SatÄ±ÅlarÄ±:\n"
+    if sales:
+        for s in sales:
+            ch = await get_channel(s.get("channel_id"))
+            text += f"- {ch.get('name') if ch else s.get('channel_id')} | {s.get('price')} Stars | {s.get('created_at')}\n"
+    else:
+        text += "- Yok\n"
+    text += "\nð£ Reklamlar:\n"
+    if ads:
+        for a in ads:
+            text += f"- {a.get('title')} | {a.get('status')} | {a.get('price')} Stars | GÃ¶rÃ¼ntÃ¼lenme: {a.get('views_count') or 0} | TÄ±k: {a.get('clicks_count') or 0}\n"
+    else:
+        text += "- Yok"
+    await message.reply_text(text[:3900])
 
 
 async def referral_user_message(message, context, user_id):
-    try:
-        me = await context.bot.get_me()
-        row = await get_user_row(user_id) or {}
-        points = int(row.get("referral_points") or 0)
-        total = int(row.get("referral_total_points") or row.get("referral_entries") or points or 0)
-        link = f"https://t.me/{me.username}?start=ref_{user_id}"
-        kb = [
-            [InlineKeyboardButton("\U0001f381 3 puan = 1 g\u00fcn", callback_data="redeem_3_1")],
-            [InlineKeyboardButton("\U0001f525 10 puan = 7 g\u00fcn", callback_data="redeem_10_7")],
-            [InlineKeyboardButton("\U0001f451 25 puan = 30 g\u00fcn", callback_data="redeem_25_30")],
-        ]
-        await message.reply_text(
-            "\U0001f381 Davet Et Kazan\n\n"
-            f"Senin linkin:\n{link}\n\n"
-            f"Mevcut puan: {points}\n"
-            f"Toplam puan: {total}\n\n"
-            f"1 yeni kullan\u0131c\u0131 = +{get_referral_invite_points()} puan\n"
-            f"\u0130lk sat\u0131n alma = +{get_referral_purchase_points()} puan + bonus g\u00fcn",
-            reply_markup=InlineKeyboardMarkup(kb),
-        )
-    except Exception as e:
-        logger.error("referral_user_message error: %s", e)
-        await message.reply_text("\u274c Referans bilgisi al\u0131namad\u0131. SQL patch \u00e7al\u0131\u015ft\u0131r\u0131ld\u0131 m\u0131 kontrol et.")
-
-
-async def redeem_referral_reward(query, context):
-    try:
-        _, cost, days = query.data.split("_")
-        cost, days = int(cost), int(days)
-        row = await get_user_row(query.from_user.id) or {}
-        points = int(row.get("referral_points") or 0)
-        if points < cost:
-            await query.message.reply_text(f"\u274c Yetersiz puan. Gerekli: {cost}, mevcut: {points}")
-            return
-
-        ch = await get_first_active_channel()
-        active = supabase.table("subscriptions").select("*").eq("user_id", query.from_user.id).eq("status", "active").limit(1).execute().data or []
-        if not ch and not active:
-            await query.message.reply_text("\u274c \u00d6d\u00fcl verilecek aktif kanal yok. \u00d6nce admin panelden en az bir VIP kanal ekle.")
-            return
-
-        supabase.table("users").update({"referral_points": points - cost}).eq("user_id", query.from_user.id).execute()
-        await extend_first_active_or_default_subscription(context, query.from_user.id, days)
-        await log_event("referral_reward_redeemed", query.from_user.id, query.from_user.id, details=f"{cost} puan -> {days} gun")
-        await query.message.reply_text(f"\u2705 {cost} puan harcand\u0131, {days} g\u00fcn VIP \u00f6d\u00fcl uyguland\u0131.")
-    except Exception as e:
-        logger.error("redeem_referral_reward error: %s", e)
-        await query.message.reply_text("\u274c \u00d6d\u00fcl kullan\u0131lamad\u0131. SQL patch ve aktif kanal kontrol\u00fc yap.")
-
-
-async def leaderboard_message(message):
-    try:
-        rows = supabase.table("users").select("*").execute().data or []
-    except Exception as e:
-        logger.error("leaderboard users query failed: %s", e)
-        await message.reply_text("\u274c Liderlik verisi okunamad\u0131. SQL patch'i \u00e7al\u0131\u015ft\u0131rman gerekiyor.")
-        return
-
-    scored = []
-    for u in rows:
-        score = int(u.get("referral_total_points") or u.get("referral_entries") or u.get("referral_points") or 0)
-        if score > 0:
-            scored.append((score, u))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    if not scored:
-        await message.reply_text(
-            "\U0001f3c6 Liderlik Tablosu\n\n"
-            "Hen\u00fcz puanl\u0131 kullan\u0131c\u0131 yok.\n\n"
-            "Kullan\u0131c\u0131lar Referans butonundan link payla\u015f\u0131nca burada g\u00f6r\u00fcnecek."
-        )
-        return
-
-    text = "\U0001f3c6 Liderlik Tablosu\n\n"
-    for i, (score, u) in enumerate(scored[:10], start=1):
-        name = f"@{u.get('username')}" if u.get("username") else str(u.get("user_id"))
-        text += f"{i}. {name} - {score} puan\n"
-
-    await message.reply_text(text)
-
-
-async def referrals_admin_message(message):
-    try:
-        events = supabase.table("referral_events").select("*").execute().data or []
-    except Exception as e:
-        logger.error("referrals_admin_message error: %s", e)
-        await message.reply_text("\u274c Referans olaylar\u0131 okunamad\u0131. SQL patch \u00e7al\u0131\u015ft\u0131r.")
-        return
-
-    joins = len([e for e in events if e.get("event_type") == "join"])
-    purchases = len([e for e in events if e.get("event_type") == "purchase"])
-    total_points = sum(int(e.get("points") or e.get("entries") or 0) for e in events)
-
-    await message.reply_text(
-        "\U0001f381 Referans Paneli\n\n"
-        f"Toplam referans kay\u0131t: {joins}\n"
-        f"Sat\u0131n almaya d\u00f6nen: {purchases}\n"
-        f"Toplam \u00e7ekili\u015f hakk\u0131/puan: {total_points}"
-    )
-    await leaderboard_message(message)
-
-
-def referral_event_points(row):
-    return int(row.get("points") or row.get("entries") or 0)
-
-
-def filter_events_for_week(rows, week):
-    with_week = [r for r in rows if r.get("week_key")]
-    if with_week:
-        return [r for r in with_week if r.get("week_key") == week]
-    return rows
-
-
-async def get_referral_events_safe(week=None):
-    try:
-        rows = supabase.table("referral_events").select("*").execute().data or []
-    except Exception as e:
-        logger.error("referral_events query failed: %s", e)
-        return []
-    if week:
-        return filter_events_for_week(rows, week)
-    return rows
-
-
-async def giveaway_user_message(message):
-    week = current_week_key()
-    rows = await get_referral_events_safe(week)
-    total_points = sum(referral_event_points(r) for r in rows)
-    participants = len(set(r.get("referrer_id") for r in rows if r.get("referrer_id") and referral_event_points(r) > 0))
-
-    await message.reply_text(
-        "\U0001f389 Haftal\u0131k \u00c7ekili\u015f\n\n"
-        f"Bu hafta kat\u0131l\u0131mc\u0131: {participants}\n"
-        f"Toplam \u00e7ekili\u015f hakk\u0131: {total_points}\n\n"
-        "Her referans puan\u0131 \u00e7ekili\u015f hakk\u0131d\u0131r.\n"
-        f"Haftan\u0131n kazanan\u0131 {get_weekly_winner_prize_days()} g\u00fcn VIP al\u0131r."
-    )
-
-async def giveaway_admin_message(message):
-    await giveaway_user_message(message)
-    kb = [[InlineKeyboardButton("Cekilisi Simdi Yap", callback_data="giveaway_run")]]
-    await message.reply_text("Admin cekilis paneli", reply_markup=InlineKeyboardMarkup(kb))
-
-
-
-async def run_giveaway(message, context, week_key, manual=False):
-    rows = await get_referral_events_safe(week_key)
-    tickets = []
-
-    for r in rows:
-        rid = r.get("referrer_id")
-        pts = referral_event_points(r)
-        if rid and pts > 0:
-            tickets.extend([int(rid)] * pts)
-
-    if not tickets:
-        await message.reply_text(
-            "\u274c Bu hafta \u00e7ekili\u015f hakk\u0131 yok.\n\n"
-            "Bir kullan\u0131c\u0131 Referans linkiyle arkada\u015f getirince \u00e7ekili\u015f hakk\u0131 olu\u015fur."
-        )
-        return
-
-    winner = random.choice(tickets)
-    days = get_weekly_winner_prize_days()
-    cid = await extend_first_active_or_default_subscription(context, winner, days)
-
-    stored = False
-    for table_name in ["giveaway_winners", "raffle_winners"]:
-        try:
-            payload = {"week_key": week_key, "user_id": winner, "channel_id": cid}
-            if table_name == "giveaway_winners":
-                payload["prize_days"] = days
-            else:
-                payload["reward_days"] = days
-            supabase.table(table_name).insert(payload).execute()
-            stored = True
-            break
-        except Exception as e:
-            logger.warning("winner insert failed for %s: %s", table_name, e)
-
-    await log_event("giveaway_winner", None, winner, cid, f"week={week_key}, days={days}, stored={stored}")
-
-    try:
-        await context.bot.send_message(winner, f"\U0001f389 Haftal\u0131k \u00e7ekili\u015fi kazand\u0131n! {days} g\u00fcn VIP \u00f6d\u00fcl uyguland\u0131.")
-    except Exception:
-        pass
-
-    await message.reply_text(f"\U0001f389 Kazanan: {winner}\n\U0001f381 \u00d6d\u00fcl: {days} g\u00fcn VIP")
-
-async def support_menu(message):
-    kb = [
-        [InlineKeyboardButton("\U0001f916 AI Destek Cevabi", callback_data="support_ai")],
-        [InlineKeyboardButton(" Link calismiyor", callback_data="support_auto_link")],
-        [InlineKeyboardButton(" Odeme yaptim", callback_data="support_auto_payment")],
-        [InlineKeyboardButton(" Uyelik tarihi", callback_data="support_auto_date")],
-        [InlineKeyboardButton(" Kupon calismiyor", callback_data="support_auto_coupon")],
-        [InlineKeyboardButton(" Admin ile konus", callback_data="support_auto_admin")],
-    ]
-    await message.reply_text(" Sorunun ne?", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def support_auto_answer(message, key):
-    answers = {
-        "link": "Uyeligim bolumunden Yeni link gonder butonuna bas. Link yine calismazsa destek mesaji yaz.",
-        "payment": " Odeme yaptiysan Uyeligim bolumunde aktif uyeligin gorunmeli. Gorunmuyorsa destek mesaji yaz.",
-        "date": "Uyeligim bolumunde baslangic ve bitis tarihini gorebilirsin.",
-        "coupon": " Kupon kodunu Kupon Gir bolumunden yaz. Bazi kuponlar sadece belirli kanal icin gecerli olabilir.",
-        "admin": " Sorununu tek mesaj olarak yaz; admin'e iletilecek.",
-        "solved": "Tamam, sorun cozuldu olarak kabul edildi. Tekrar yardim gerekirse Destek bolumunu kullanabilirsin.",
-    }
-    if key == "admin":
-        # mode is per user, but we only have message here. A new text will go to menu without mode. Ask user to use Destek menu.
-        await message.reply_text(" Admin'e yazmak icin ana menude Destek butonuna basip mesajini yaz.")
-    else:
-        await message.reply_text(answers.get(key, "Destek icin Destek butonunu kullan."))
-
-
-async def faq_user_message(message):
-    rows = supabase.table("faq").select("*").eq("active", True).order("id").execute().data or []
-    rows = clean_faq_rows(rows)
-    if not rows:
-        await message.reply_text("\u2753 Hen\u00fcz SSS eklenmedi."); return
-    kb = [[InlineKeyboardButton(row.get("question") or f"SSS {row['id']}", callback_data=f"faq_view_{row['id']}")] for row in rows[:40]]
-    await message.reply_text("\u2753 S\u0131k Sorulan Sorular", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def faq_answer(message, faq_id):
-    row = supabase.table("faq").select("*").eq("id", faq_id).single().execute().data
-    if not row or is_bad_text(row.get("question")) or is_bad_text(row.get("answer")):
-        await message.reply_text("\u274c SSS bulunamad\u0131."); return
-    await message.reply_text(f"\u2753 {row.get('question')}\n\n{row.get('answer')}")
-
-
-async def faq_admin_message(message):
-    rows = supabase.table("faq").select("*").order("id", desc=True).execute().data or []
-    rows = clean_faq_rows(rows)
-    await message.reply_text("\u2753 SSS Y\u00f6netimi", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("\u2795 SSS Ekle", callback_data="faq_add")]]))
-    for row in rows[:30]:
-        status = "Aktif \u2705" if row.get("active") else "Pasif \u26d4"
-        await message.reply_text(f"ID: {row['id']}\nSoru: {row.get('question')}\nDurum: {status}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("A\u00e7/Kapat", callback_data=f"faq_toggle_{row['id']}")]]))
-
-
-async def create_cancel_request(update, context):
-    rows = supabase.table("subscriptions").select("*").eq("user_id", update.effective_user.id).eq("status", "active").execute().data or []
-    if not rows:
-        await update.message.reply_text(" Aktif uyeligin olmadigi icin iptal talebi olusturulamaz."); return
-    for sub in rows:
-        await create_cancel_request_for_sub(update.message, context, sub)
-
-
-async def request_cancel_from_button(query, context):
-    sub_id = int(query.data.split("_")[2])
-    sub = await get_subscription(sub_id)
-    if not sub or int(sub.get("user_id")) != query.from_user.id or sub.get("status") != "active":
-        await query.message.reply_text(" Aktif uyelik bulunamadi."); return
-    await create_cancel_request_for_sub(query.message, context, sub)
-
-
-async def create_cancel_request_for_sub(message, context, sub):
-    existing = supabase.table("cancel_requests").select("*").eq("user_id", sub["user_id"]).eq("channel_id", sub["channel_id"]).eq("status", "pending").execute().data or []
-    if existing:
-        await message.reply_text(" Zaten bekleyen iptal talebin var."); return
-    supabase.table("cancel_requests").insert({"user_id": sub["user_id"], "channel_id": sub["channel_id"], "status": "pending"}).execute()
-    await log_event("cancel_requested", sub["user_id"], sub["user_id"], sub["channel_id"])
-    await message.reply_text("Iptal talebin admin onayina gonderildi.")
-    await context.bot.send_message(OWNER_ID, f" Yeni iptal talebi!\n\nKullanici ID: {sub['user_id']}\nKanal ID: {sub['channel_id']}")
-
-# =========================================================
-# ADMIN LISTS / REPORTS / USER DETAILS
-# =========================================================
-
-async def show_users_for_grant(message):
-    rows = supabase.table("users").select("*").order("id", desc=True).limit(20).execute().data or []
-    if not rows:
-        await message.reply_text(" Henuz kullanici yok."); return
-    for u in rows:
-        username = f"@{u.get('username')}" if u.get("username") else "username yok"
-        kb = [[InlineKeyboardButton(" Detay", callback_data=f"userdetail_{u['user_id']}")], [InlineKeyboardButton(" VIP Ver", callback_data=f"grant_user_{u['user_id']}")]]
-        await message.reply_text(f" {username}\nID: {u['user_id']}", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def show_channels_for_grant(message, target_user_id):
-    rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
-    if not rows:
-        await message.reply_text(" Once kanal eklemelisin."); return
-    for ch in rows:
-        await message.reply_text(f" Kanal sec\n\nAd: {ch.get('name')}\nFiyat: {ch.get('price')} \nSure: {ch.get('duration_days')} gun", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f" {ch.get('name')} sec", callback_data=f"grant_channel_{target_user_id}_{ch['id']}")]]))
-
-
-async def show_grant_duration(message, target_user_id, channel_id):
-    kb = [[InlineKeyboardButton(" 7 Gun", callback_data=f"grant_days_{target_user_id}_{channel_id}_7"), InlineKeyboardButton(" 30 Gun", callback_data=f"grant_days_{target_user_id}_{channel_id}_30")], [InlineKeyboardButton(" 90 Gun", callback_data=f"grant_days_{target_user_id}_{channel_id}_90"), InlineKeyboardButton(" Ozel Sure", callback_data=f"grant_custom_{target_user_id}_{channel_id}")]]
-    await message.reply_text(" VIP suresini sec:", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def search_user(message, query):
-    q = query.replace("@", "").strip()
-    if q.isdigit():
-        rows = supabase.table("users").select("*").eq("user_id", int(q)).execute().data or []
-    else:
-        rows = supabase.table("users").select("*").ilike("username", f"%{q}%").execute().data or []
-    if not rows:
-        await message.reply_text(" Kullanici bulunamadi."); return
-    for row in rows[:5]:
-        await show_user_detail(message, row)
-
-
-async def show_user_detail_by_id(message, user_id):
-    row = await get_user_row(user_id)
-    if not row:
-        await message.reply_text(" Kullanici bulunamadi."); return
-    await show_user_detail(message, row)
-
-
-async def show_user_detail(message, user_row):
-    user_id = user_row["user_id"]
-    username = f"@{user_row.get('username')}" if user_row.get("username") else "username yok"
-    blacklisted = await is_blacklisted(user_id)
-    ad_balance = await get_ad_balance(user_id)
-    kb_top = [
-        [InlineKeyboardButton("\U0001f381 VIP Ver", callback_data=f"grant_user_{user_id}")],
-        [InlineKeyboardButton("\U0001f4b0 Bakiye Y\xfckle", callback_data=f"user_balance_{user_id}")],
-        [InlineKeyboardButton("\U0001f6ab Kara Listeye Al", callback_data=f"blacklist_{user_id}")]
-        if not blacklisted
-        else [InlineKeyboardButton("\u2705 Kara Listeden \xc7\u0131kar", callback_data=f"unblacklist_{user_id}")],
-    ]
-    await message.reply_text(
-        f"\U0001f464 Kullan\u0131c\u0131 Detay\u0131\n\n"
-        f"ID: {user_id}\n"
-        f"Username: {username}\n"
-        f"Kara liste: {'Evet' if blacklisted else 'Hay\u0131r'}\n"
-        f"Referans puan: {user_row.get('referral_points') or 0}\n"
-        f"Reklam bakiyesi: {ad_balance} Stars",
-        reply_markup=InlineKeyboardMarkup(kb_top),
-    )
-    subs = supabase.table("subscriptions").select("*").eq("user_id", user_id).order("id", desc=True).execute().data or []
-    if not subs:
-        await message.reply_text("Uyelik yok."); return
-    for sub in subs:
-        ch = await get_channel(sub.get("channel_id"))
-        name = ch.get("name") if ch else f"Kanal ID {sub.get('channel_id')}"
-        kb = [[InlineKeyboardButton("Iptal Et", callback_data=f"usub_cancel_{sub['id']}"), InlineKeyboardButton(" Link Gonder", callback_data=f"usub_link_{sub['id']}")], [InlineKeyboardButton("+7 gun", callback_data=f"usub_extend_{sub['id']}_7"), InlineKeyboardButton("+30 gun", callback_data=f"usub_extend_{sub['id']}_30")]]
-        await message.reply_text(f" {name}\nDurum: {sub.get('status')}\nBitis: {sub.get('end_date')}", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def users_message(message):
-    await show_users_for_grant(message)
-
-
-async def sales_message(message):
-    rows = supabase.table("sales").select("*").order("id", desc=True).limit(20).execute().data or []
-    if not rows:
-        await message.reply_text(" Henuz satis yok."); return
-    for s in rows:
-        refund = s.get("refund_status") or "none"
-        kb = [] if refund == "refunded" else [[InlineKeyboardButton(" Iade Isaretle", callback_data=f"refund_sale_{s['id']}")]]
-        await message.reply_text(f" Satis\n\nID: {s['id']}\nKullanici: @{s.get('username') or 'yok'}\nUser ID: {s.get('user_id')}\nKanal ID: {s.get('channel_id')}\nPaket ID: {s.get('package_id') or '-'}\nFiyat: {s.get('price')} \nKupon: {s.get('coupon_code') or 'Yok'}\nIade: {refund}\nTarih: {s.get('created_at')}", reply_markup=InlineKeyboardMarkup(kb) if kb else None)
-
-
-async def report_message(message):
-    rows = supabase.table("sales").select("*").execute().data or []
-    today, month = now_utc().date().isoformat(), now_utc().strftime("%Y-%m")
-    tc = ts = mc = ms = totalc = totals = refundc = 0
-    for s in rows:
-        if s.get("refund_status") == "refunded":
-            refundc += 1; continue
-        price, created = safe_int(s.get("price"), 0), str(s.get("created_at") or "")
-        totalc += 1; totals += price
-        if created.startswith(today): tc += 1; ts += price
-        if created.startswith(month): mc += 1; ms += price
-    await message.reply_text(f" Satis Raporu\n\nBugun satis: {tc}\nBugun Stars: {ts}\n\nBu ay satis: {mc}\nBu ay Stars: {ms}\n\nToplam satis: {totalc}\nToplam Stars: {totals}\nIade isaretli satis: {refundc}")
-
-
-async def channel_stats_message(message):
-    rows = supabase.table("sales").select("*").execute().data or []
-    stats = {}
-    for s in rows:
-        if s.get("refund_status") == "refunded" or not s.get("channel_id"):
-            continue
-        cid = s.get("channel_id")
-        stats.setdefault(cid, {"count": 0, "stars": 0})
-        stats[cid]["count"] += 1
-        stats[cid]["stars"] += safe_int(s.get("price"), 0)
-    if not stats:
-        await message.reply_text(" Henuz kanal satisi yok."); return
-    text = " Kanal Bazli Istatistik\n\n"
-    for cid, val in stats.items():
-        ch = await get_channel(cid)
-        name = ch.get("name") if ch else f"Kanal ID {cid}"
-        text += f" {name}\nSatis: {val['count']}\nStars: {val['stars']}\n\n"
-    await message.reply_text(text)
-
-
-async def abandoned_message(message):
-    rows = supabase.table("checkout_intents").select("*").eq("status", "started").order("id", desc=True).limit(20).execute().data or []
-    if not rows:
-        await message.reply_text(" Yarim kalan odeme yok."); return
-    text = " Yarim Kalan Odemeler\n\n"
-    for r in rows:
-        text += f"ID: {r['id']} | User: {r.get('user_id')} | {r.get('item_type')} {r.get('item_id')} | {r.get('price')}  | Hatirlatma: {r.get('reminder_sent')}\n"
-    await message.reply_text(text[:3900])
-
-
-async def coupons_message(message):
-    rows = supabase.table("coupons").select("*").order("id", desc=True).execute().data or []
-    await message.reply_text("\U0001f39f\ufe0f Kuponlar", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Kupon Olustur", callback_data="coupon_add")]]))
-    if not rows:
-        await message.reply_text("Henuz kupon yok."); return
-    for c in rows[:30]:
-        status = "Aktif " if c.get("active") else "Pasif "
-        ch_text = f"Kanal ID: {c.get('channel_id')}" if c.get("channel_id") else "Tum kanallar"
-        await message.reply_text(f"Kupon: {c.get('code')}\nYuzde: %{c.get('discount_percent') or 0}\nStars indirim: {c.get('discount_stars') or 0}\nGecerli: {ch_text}\nKullanim: {c.get('used_count') or 0}/{c.get('max_uses') or ''}\nDurum: {status}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ac/Kapat", callback_data=f"coupon_toggle_{c['id']}")]]))
-
-
-async def campaign_message(message):
-    text = f" Kampanya\n\nDurum: {'Aktif' if campaign_active() else 'Kapali'}\nIndirim: %{get_setting('campaign_percent', '0')}\nBitis: {get_setting('campaign_end', '') or '-'}"
-    kb = [[InlineKeyboardButton(" Baslat", callback_data="campaign_start"), InlineKeyboardButton(" Kapat", callback_data="campaign_stop")]]
-    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def support_requests_message(message):
-    rows = supabase.table("support_requests").select("*").eq("status", "open").order("id", desc=True).limit(20).execute().data or []
-    if not rows:
-        await message.reply_text(" Acik destek talebi yok."); return
-    for r in rows:
-        await message.reply_text(f"Destek Talebi\n\nID: {r['id']}\nKullanici: @{r.get('username') or 'yok'}\nUser ID: {r.get('user_id')}\nMesaj:\n{r.get('message')}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Kapat", callback_data=f"support_close_{r['id']}")]]))
-
-
-async def cancel_requests_message(message):
-    rows = supabase.table("cancel_requests").select("*").eq("status", "pending").execute().data or []
-    if not rows:
-        await message.reply_text(" Bekleyen iptal talebi yok."); return
-    for r in rows:
-        kb = [[InlineKeyboardButton(" Onayla", callback_data=f"cancel_ok_{r['id']}"), InlineKeyboardButton(" Reddet", callback_data=f"cancel_no_{r['id']}")]]
-        await message.reply_text(f"Iptal Talebi\n\nTalep ID: {r['id']}\nKullanici ID: {r.get('user_id')}\nKanal ID: {r.get('channel_id')}", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def blacklist_message(message):
-    rows = supabase.table("blacklist").select("*").eq("active", True).order("id", desc=True).execute().data or []
-    if not rows:
-        await message.reply_text(" Kara listede aktif kullanici yok."); return
-    for b in rows:
-        await message.reply_text(f" User ID: {b.get('user_id')}\nSebep: {b.get('reason') or '-'}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Cikar", callback_data=f"unblacklist_{b['user_id']}")]]))
-
-
-async def admins_message(message):
-    rows = supabase.table("admins").select("*").order("id", desc=True).execute().data or []
-    await message.reply_text("\U0001f46e Adminler", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Admin Ekle", callback_data="admin_add_admin")]]))
-    await message.reply_text(f"Owner: {OWNER_ID}")
-    for a in rows:
-        status = "Aktif " if a.get("active") else "Pasif "
-        await message.reply_text(f"User ID: {a.get('user_id')}\nRole: {a.get('role')}\nDurum: {status}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ac/Kapat", callback_data=f"admin_toggle_{a['user_id']}")]]))
-
-
-async def logs_message(message):
-    rows = supabase.table("logs").select("*").order("id", desc=True).limit(30).execute().data or []
-    if not rows:
-        await message.reply_text(" Henuz log yok."); return
-    text = " Son Islemler\n\n"
-    for l in rows:
-        text += f"ID: {l['id']}\nIslem: {l.get('action')}\nActor: {l.get('actor_id')}\nTarget: {l.get('target_user_id')}\nKanal: {l.get('channel_id')}\nDetay: {l.get('details') or '-'}\nTarih: {l.get('created_at')}\n\n"
-    await message.reply_text(text[:3900])
-
-
-async def export_sales_csv(message):
-    rows = supabase.table("sales").select("*").order("id", desc=True).execute().data or []
-    output = io.StringIO()
-    fieldnames = ["id", "user_id", "username", "channel_id", "package_id", "price", "coupon_code", "refund_status", "payment_payload", "created_at"]
-    writer = csv.DictWriter(output, fieldnames=fieldnames)
-    writer.writeheader()
-    for r in rows:
-        writer.writerow({k: r.get(k) for k in fieldnames})
-    file_data = io.BytesIO(output.getvalue().encode("utf-8"))
-    file_data.name = "sales.csv"
-    await message.reply_document(document=file_data, filename="sales.csv", caption="\U0001f4c4 Sat\u0131\u015f CSV")
-
-# =========================================================
-# ADMIN ACTIONS
-# =========================================================
-
-async def handle_cancel_admin(query, context):
-    if not can_manage(query.from_user.id):
-        await query.message.reply_text(" Yetkin yok."); return
-    parts = query.data.split("_")
-    action, rid = parts[1], int(parts[2])
-    req = supabase.table("cancel_requests").select("*").eq("id", rid).single().execute().data
-    if not req:
-        await query.message.reply_text(" Talep bulunamadi."); return
-    if action == "ok":
-        supabase.table("cancel_requests").update({"status": "approved"}).eq("id", rid).execute()
-        supabase.table("subscriptions").update({"status": "cancelled"}).eq("user_id", req["user_id"]).eq("channel_id", req["channel_id"]).execute()
-        ch = await get_channel(req["channel_id"])
-        if ch:
-            await remove_user_from_channel(context, ch, req["user_id"])
-        await log_event("cancel_approved", query.from_user.id, req["user_id"], req["channel_id"])
-        await query.message.reply_text("Iptal talebi onaylandi.")
-    else:
-        supabase.table("cancel_requests").update({"status": "rejected"}).eq("id", rid).execute()
-        await log_event("cancel_rejected", query.from_user.id, req["user_id"], req["channel_id"])
-        await query.message.reply_text("Iptal talebi reddedildi.")
-
-
-async def admin_cancel_subscription(message, context, sub_id):
-    sub = await get_subscription(sub_id)
-    if not sub:
-        await message.reply_text(" Uyelik bulunamadi."); return
-    ch = await get_channel(sub["channel_id"])
-    supabase.table("subscriptions").update({"status": "cancelled"}).eq("id", sub_id).execute()
-    if ch:
-        await remove_user_from_channel(context, ch, sub["user_id"])
-    await log_event("subscription_cancelled_by_admin", message.chat_id, sub["user_id"], sub["channel_id"])
-    await message.reply_text(" Uyelik iptal edildi.")
-
-
-async def admin_resend_link_for_subscription(message, context, sub_id):
-    sub = await get_subscription(sub_id)
-    if not sub:
-        await message.reply_text(" Uyelik bulunamadi."); return
-    ch = await get_channel(sub["channel_id"])
-    link = await safe_create_and_store_link(context, sub["user_id"], sub["channel_id"], ch)
-    if link:
-        try:
-            await context.bot.send_message(sub["user_id"], f" Yeni VIP giris linkin:\n{link}")
-            await message.reply_text(" Yeni link kullaniciya gonderildi.")
-        except Exception:
-            await message.reply_text(f" Link uretildi ama gonderilemedi. Manuel gonder:\n{link}")
-    else:
-        await message.reply_text(" Link uretilemedi.")
-
-
-async def admin_extend_subscription_simple(sub_id, days):
-    sub = await get_subscription(sub_id)
-    if not sub:
-        return False
-    old_end = parse_dt(sub.get("end_date")) or now_utc()
-    base = old_end if old_end > now_utc() else now_utc()
-    new_end = base + timedelta(days=days)
-    supabase.table("subscriptions").update({"end_date": new_end.isoformat(), "warn_3d_sent": False, "warn_1d_sent": False}).eq("id", sub_id).execute()
-    return True
-
-
-async def admin_extend_subscription(message, sub_id, days):
-    ok = await admin_extend_subscription_simple(sub_id, days)
-    await message.reply_text(f" Uyelik {days} gun uzatildi." if ok else " Uyelik bulunamadi.")
-
-
-async def mark_refund(message, admin_id, sale_id):
-    sale = supabase.table("sales").select("*").eq("id", sale_id).single().execute().data
-    if not sale:
-        await message.reply_text(" Satis bulunamadi."); return
-    supabase.table("sales").update({"refund_status": "refunded", "refunded_at": now_utc().isoformat(), "refunded_by": admin_id}).eq("id", sale_id).execute()
-    await log_event("refund_marked", admin_id, sale.get("user_id"), sale.get("channel_id"), f"sale_id={sale_id}")
-    await message.reply_text(" Satis iade edildi olarak isaretlendi. Not: Bu sadece sistem ici isarettir; Telegram Stars iadesini otomatik yapmaz.")
-
-
-async def resend_invite_link(query, context):
-    sub_id = int(query.data.split("_")[1])
-    sub = await get_subscription(sub_id)
-
-    if not sub or int(sub.get("user_id")) != query.from_user.id or sub.get("status") != "active":
-        await query.message.reply_text("\u274c Aktif \xfcyelik bulunamad\u0131.")
-        return
-
-    used_links = safe_int(sub.get("link_resend_count"), 0)
-    if used_links >= MAX_USER_LINK_RESENDS:
-        await query.message.reply_text(
-            "\u274c Yeni link hakk\u0131n bitti.\n\n"
-            f"Her abonelik i\xe7in en fazla {MAX_USER_LINK_RESENDS} kez yeni link isteyebilirsin.\n"
-            "Sorun ya\u015f\u0131yorsan Destek b\xf6l\xfcm\xfcnden admin ile ileti\u015fime ge\xe7."
-        )
-        return
-
-    ch = await get_channel(sub["channel_id"])
-    link = await safe_create_and_store_link(context, sub["user_id"], sub["channel_id"], ch)
-
-    if not link:
-        await query.message.reply_text("\u274c Link \xfcretilemedi. Botun kanalda/grupta admin oldu\u011fundan emin ol veya destek a\xe7.")
-        return
-
-    new_count = used_links + 1
-    try:
-        supabase.table("subscriptions").update({"link_resend_count": new_count}).eq("id", sub_id).execute()
-    except Exception as e:
-        logger.warning("link_resend_count update failed: %s", e)
-
-    remaining = max(0, MAX_USER_LINK_RESENDS - new_count)
-    await query.message.reply_text(
-        f"\U0001f517 Yeni tek kullan\u0131ml\u0131k linkin:\n{link}\n\n"
-        f"Kalan yeni link hakk\u0131n: {remaining}/{MAX_USER_LINK_RESENDS}"
-    )
-
-async def broadcast_message(message, context, text):
-    rows = supabase.table("users").select("*").execute().data or []
-    sent = failed = 0
-    await message.reply_text(f" Duyuru basladi. Kullanici sayisi: {len(rows)}")
-    for u in rows:
-        try:
-            if not await is_blacklisted(u["user_id"]):
-                await context.bot.send_message(u["user_id"], text)
-                sent += 1
-            await asyncio.sleep(BROADCAST_DELAY_SECONDS)
-        except Exception:
-            failed += 1
-    await log_event("broadcast_sent", message.chat_id, details=f"sent={sent}, failed={failed}")
-    await message.reply_text(f" Duyuru bitti. Gonderildi: {sent}, Hata: {failed}")
-
-# =========================================================
-# AD MARKETPLACE / BALANCE SYSTEM
-# =========================================================
-
-
-def get_channel_ad_price(ch):
-    """Return per-channel ad price. Falls back to default setting."""
-    try:
-        value = ch.get("ad_price")
-        if value is not None:
-            price = int(value)
-            if price > 0:
-                return price
-    except Exception:
-        pass
-    return safe_int(get_setting("ad_default_single_price", "1000"), 1000)
-
-async def get_ad_balance(user_id):
-    try:
-        row = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data
-        if row:
-            return int(row[0].get("balance") or 0)
-        supabase.table("ad_balances").insert({"user_id": int(user_id), "balance": 0, "spent": 0}).execute()
-    except Exception as e:
-        logger.warning("ad balance read failed: %s", e)
-    return 0
-
-
-async def change_ad_balance(user_id, amount, tx_type, description, order_id=None):
-    user_id = int(user_id)
-    amount = int(amount)
-    current = await get_ad_balance(user_id)
-    new_balance = current + amount
-    if new_balance < 0:
-        return False
-    try:
-        row = supabase.table("ad_balances").select("*").eq("user_id", user_id).execute().data
-        if row:
-            spent = int(row[0].get("spent") or 0)
-            if amount < 0:
-                spent += abs(amount)
-            supabase.table("ad_balances").update({"balance": new_balance, "spent": spent, "updated_at": now_utc().isoformat()}).eq("user_id", user_id).execute()
-        else:
-            supabase.table("ad_balances").insert({"user_id": user_id, "balance": new_balance, "spent": abs(amount) if amount < 0 else 0}).execute()
-        supabase.table("ad_transactions").insert({"user_id": user_id, "amount": amount, "type": tx_type, "description": description, "order_id": order_id}).execute()
-        return True
-    except Exception as e:
-        logger.error("ad balance update failed: %s", e)
-        return False
-
-
-async def ensure_default_ad_packages():
-    try:
-        rows = supabase.table("ad_packages").select("*").execute().data or []
-        if rows:
-            return
-        supabase.table("ad_packages").insert([
-            {"name": "Tek Kanal Reklami", "price": safe_int(get_setting("ad_default_single_price", "1000"), 1000), "target_type": "single", "channel_id": None, "description": "Adminin sectigi tek aktif VIP kanalda reklam", "active": True},
-            {"name": "Tum Kanallar Reklami", "price": safe_int(get_setting("ad_default_all_price", "3000"), 3000), "target_type": "all", "channel_id": None, "description": "Tum aktif VIP kanallarda reklam", "active": True},
-        ]).execute()
-    except Exception as e:
-        logger.warning("default ad packages failed: %s", e)
-
-
+    bot_username = (await context.bot.get_me()).username
+    link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    rows = supabase.table("users").select("*").eq("user_id", int(user_id)).execute().data or []
+    pts = safe_int(rows[0].get("referral_points"), 0) if rows else 0
+    await message.reply_text(f"ð Referans\n\nSenin linkin:\n{link}\n\nMevcut puan: {pts}")
+
+# =========================
+# BALANCE + ADS
+# =========================
 async def show_balance_center(message, user_id):
-    balance = await get_ad_balance(user_id)
-    rows = supabase.table("ad_balances").select("*").eq("user_id", int(user_id)).execute().data or []
-    spent = int(rows[0].get("spent") or 0) if rows else 0
-    orders = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).execute().data or []
-    pending = len([o for o in orders if o.get("status") == "pending"])
-    published = len([o for o in orders if o.get("status") == "published"])
-    rejected = len([o for o in orders if str(o.get("status") or "").startswith("rejected")])
-
-    kb = [
-        [InlineKeyboardButton("\u2b50 Bakiye Ekle", callback_data="ad_topup_custom")],
-        [InlineKeyboardButton("\U0001f4e3 Kanallara Reklam Ver", callback_data="ad_show_packages")],
-        [InlineKeyboardButton("\U0001f4c4 Reklamlar\u0131m", callback_data="ad_my_orders")],
-        [InlineKeyboardButton("\U0001f9fe Bakiye Hareketleri", callback_data="ad_transactions")],
-    ]
-
-    await message.reply_text(
-        f"\U0001f4b0 Bakiye Merkezi\n\n"
-        f"Mevcut bakiye: {balance} Stars\n"
-        f"Toplam harcanan: {spent} Stars\n\n"
-        f"Bekleyen reklam: {pending}\n"
-        f"Yay\u0131nlanan reklam: {published}\n"
-        f"Reddedilen/iade edilen reklam: {rejected}\n\n"
-        f"Ne yapmak istiyorsun?",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
+    bal, spent = get_balance(user_id)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("â­ Bakiye Ekle", callback_data="bal_topup")],
+        [InlineKeyboardButton("ð£ Kanallara Reklam Ver", callback_data="bal_ad")],
+        [InlineKeyboardButton("ð ReklamlarÄ±m", callback_data="bal_myads")],
+        [InlineKeyboardButton("ð§¾ Bakiye Hareketleri", callback_data="bal_tx")],
+    ])
+    await message.reply_text(f"ð° Reklam Bakiyen\n\nBakiye: {bal} Stars\nHarcanan: {spent} Stars", reply_markup=kb)
 
 
-async def show_ad_balance(message, user_id):
-    await show_balance_center(message, user_id)
+async def ask_topup_amount(message, context):
+    context.user_data["mode"] = "topup_amount"
+    await message.reply_text("â­ YÃ¼klemek istediÄin Stars tutarÄ±nÄ± yaz.\n\nÃrnek: 2500")
 
 
-async def ask_custom_topup_amount(message, context):
-    context.user_data.clear()
-    context.user_data["mode"] = "ad_topup_amount"
-    await message.reply_text(
-        "\u2b50 Bakiye Ekle\n\n"
-        "Y\u00fcklemek istedi\u011fin Stars miktar\u0131n\u0131 yaz.\n\n"
-        "\u00d6rnek:\n"
-        "2500\n\n"
-        "Minimum: 50 Stars\n"
-        "Maksimum: 100000 Stars"
-    )
-
-
-async def show_topup_options(message):
-    await message.reply_text(
-        "\u2b50 Bakiye Ekle\n\n"
-        "Art\u0131k sabit tutar butonu yok. Bakiye Merkezi > Bakiye Ekle ile istedi\u011fin tutar\u0131 yazabilirsin.\n"
-        "\u00d6rnek: 2500"
-    )
-
-
-async def send_custom_topup_invoice(message, context, amount):
+async def create_topup_invoice(message, context, amount):
+    amount = safe_int(amount)
+    if amount < AD_MIN_TOPUP:
+        await message.reply_text("â Tutar en az 1 Stars olmalÄ±.")
+        return
     await context.bot.send_invoice(
         chat_id=message.chat_id,
         title="Reklam Bakiyesi",
-        description=f"{amount} Stars reklam bakiyesi y\u00fckleme",
-        payload=f"topup_{amount}",
+        description=f"{amount} Stars reklam bakiyesi yÃ¼kleme.",
+        payload=f"adtopup_{amount}",
         provider_token="",
         currency="XTR",
         prices=[LabeledPrice(label="Reklam Bakiyesi", amount=amount)],
     )
 
 
-async def handle_topup(query, context):
-    try:
-        amount = int(query.data.split("_")[1])
-    except Exception:
-        await query.message.reply_text("Ge\u00e7ersiz tutar.")
-        return
-    if amount < 50 or amount > 100000:
-        await query.message.reply_text("Ge\u00e7ersiz tutar. 50 ile 100000 Stars aras\u0131 olmal\u0131.")
-        return
-    await context.bot.send_invoice(
-        chat_id=query.message.chat_id,
-        title="Reklam Bakiyesi",
-        description=f"{amount} Stars reklam bakiyesi y\u00fckleme",
-        payload=f"topup_{amount}",
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label="Reklam Bakiyesi", amount=amount)],
-    )
-
-
-async def show_ad_transactions(message, user_id):
-    rows = supabase.table("ad_transactions").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
-    if not rows:
-        await message.reply_text("Hen\u00fcz bakiye hareketi yok.")
-        return
-    text = "\U0001f9fe Son Bakiye Hareketleri\n\n"
-    for r in rows:
-        sign = "+" if int(r.get("amount") or 0) > 0 else ""
-        text += f"{sign}{r.get('amount')} Stars | {r.get('type')}\n{r.get('description') or '-'}\n{r.get('created_at')}\n\n"
-    await message.reply_text(text[:3900])
-
-
-
-async def show_ad_channels_user(message, user_id):
+async def show_ad_channel_choices(message, user_id):
     rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
     if not rows:
-        await message.reply_text("Su anda reklam verilebilecek aktif kanal yok.")
+        await message.reply_text("ð£ Reklam verilecek aktif kanal yok.")
         return
-
-    balance = await get_ad_balance(user_id)
-    await message.reply_text(
-        f"\U0001f4e3 Kanallara Reklam Ver\n\n"
-        f"Bakiyen: {balance} Stars\n\n"
-        f"Reklam vermek istedigin kanali sec.\n"
-        f"Bakiyen yeterliyse reklam formu acilir, yetmezse once bakiye yuklemen istenir."
-    )
-
+    bal, _ = get_balance(user_id)
+    await message.reply_text(f"ð£ Reklam verilecek kanalÄ± seÃ§.\n\nBakiyen: {bal} Stars")
     for ch in rows:
-        price = get_channel_ad_price(ch)
-        chat_id = ch.get("chat_id") or "-"
-        desc = ch.get("description") or "-"
-        can_buy = balance >= price
-        button_text = "Bu kanala reklam ver" if can_buy else "Bakiye yetersiz"
-        await message.reply_text(
-            f"\U0001f4e2 {ch.get('name')}\n"
-            f"Reklam fiyati: {price} Stars\n"
-            f"Chat ID: {chat_id}\n"
-            f"Aciklama: {desc}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(button_text, callback_data=f"adch_{ch['id']}")]])
-        )
+        price = safe_int(ch.get("ad_price"), 1000)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"ð£ Bu kanalda reklam ver - {price} Stars", callback_data=f"adch_{ch['id']}")]])
+        await message.reply_text(f"ð¢ {ch.get('name')}\nReklam fiyatÄ±: {price} Stars", reply_markup=kb)
 
 
-async def show_ad_packages_user(message, user_id):
-    # Backward-compatible name. New flow has no ad packages; user selects channel directly.
-    await show_ad_channels_user(message, user_id)
-
-
-async def start_ad_order_channel(query, context):
-    channel_id = int(query.data.split("_")[1])
+async def start_ad_for_channel(query, context):
+    channel_id = safe_int(query.data.split("_")[1])
     ch = await get_channel(channel_id)
-
     if not ch or not ch.get("active"):
-        await query.message.reply_text("Kanal bulunamadi veya pasif.")
+        await query.message.reply_text("â Kanal aktif deÄil.")
         return
-
-    price = get_channel_ad_price(ch)
-    balance = await get_ad_balance(query.from_user.id)
-
-    if balance < price and not (test_mode_on() and is_admin(query.from_user.id)):
-        await query.message.reply_text(
-            f"Bakiyen yetersiz.\n\n"
-            f"Bu kanal reklam fiyati: {price} Stars\n"
-            f"Bakiyen: {balance} Stars\n\n"
-            f"Once Bakiye > Bakiye Ekle kismindan bakiye yukle."
-        )
+    price = safe_int(ch.get("ad_price"), 1000)
+    bal, _ = get_balance(query.from_user.id)
+    if bal < price and not (is_admin(query.from_user.id) and test_mode_on()):
+        await query.message.reply_text(f"â Bakiyen yetersiz.\nGerekli: {price} Stars\nBakiyen: {bal} Stars\n\nð° Bakiye bÃ¶lÃ¼mÃ¼nden yÃ¼kleme yapabilirsin.")
         return
-
-    context.user_data.clear()
     context.user_data["ad_channel_id"] = channel_id
     context.user_data["ad_price"] = price
-    context.user_data["ad_channel_name"] = ch.get("name") or f"Kanal ID {channel_id}"
-
-    kb = [
-        [InlineKeyboardButton("\U0001f916 AI ile Reklam Yazdir", callback_data="ad_method_ai")],
-        [InlineKeyboardButton("\u26a1 Tek Mesajla Reklam", callback_data="ad_method_single")],
-        [InlineKeyboardButton("\u2728 Haz\u0131r Reklam Olu\u015ftur", callback_data="ad_method_template")],
-        [InlineKeyboardButton("\u270d\ufe0f Ad\u0131m Ad\u0131m Olu\u015ftur", callback_data="ad_method_step")],
-        [InlineKeyboardButton("\u274c \u0130ptal", callback_data="ad_cancel")],
-    ]
-
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("ð¤ AI ile Reklam YazdÄ±r", callback_data="ad_ai")],
+        [InlineKeyboardButton("â¡ Tek Mesajla Reklam", callback_data="ad_one")],
+        [InlineKeyboardButton("â¨ HazÄ±r Reklam OluÅtur", callback_data="ad_template")],
+        [InlineKeyboardButton("â Ä°ptal", callback_data="flow_cancel")],
+    ])
     await query.message.reply_text(
-        f"Reklam kanal\u0131 se\xe7ildi: {ch.get('name')}\n"
-        f"Fiyat: {price} Stars\n\n"
-        "Nas\u0131l reklam olu\u015fturmak istiyorsun?",
-        reply_markup=InlineKeyboardMarkup(kb),
+        f"ð£ {ch.get('name')} kanalÄ±na reklam ver\nFiyat: {price} Stars\n\nNasÄ±l reklam oluÅturmak istiyorsun?",
+        reply_markup=kb,
     )
 
 
-async def start_ad_order(query, context):
-    # Old package callback support. New UI does not use packages.
-    await query.message.reply_text("Reklam paketi sistemi kapatildi. Bakiye > Kanallara Reklam Ver kismindan kanal sec.")
+async def ask_ad_ai(message, context):
+    context.user_data["mode"] = "ad_ai_prompt"
+    await message.reply_text("ð¤ ReklamÄ±nÄ± kÄ±saca anlat ve linki ekle.\n\nÃrnek:\nYeni VIP kanal reklamÄ±. HÄ±zlÄ± katÄ±lÄ±m, Stars ile Ã¶deme. Link: https://t.me/kanal")
 
 
-async def preview_ad_order(message, context):
+async def ask_ad_one(message, context):
+    context.user_data["mode"] = "ad_one"
+    await message.reply_text("â¡ ReklamÄ±nÄ± tek mesajla gÃ¶nder:\n\nBaÅlÄ±k | Metin | Link\n\nÃrnek:\nYeni Kanal | GÃ¼ncel paylaÅÄ±mlar iÃ§in hemen incele | https://t.me/kanal")
+
+
+async def ask_ad_template(message, context):
+    context.user_data["mode"] = "ad_template"
+    await message.reply_text("â¨ HazÄ±r reklam iÃ§in Åunu yaz:\n\nBaÅlÄ±k | KÄ±sa aÃ§Ä±klama | Link")
+
+
+def parse_ad_pipe(text):
+    parts = [p.strip() for p in text.split("|")]
+    if len(parts) < 3:
+        return None
+    return parts[0], parts[1], parts[2]
+
+
+async def create_ad_order(message, context, title, body, link):
+    user = message.from_user
     channel_id = context.user_data.get("ad_channel_id")
-    price = int(context.user_data.get("ad_price") or 0)
-    channel_name = context.user_data.get("ad_channel_name") or "Secilen kanal"
-
-    if not channel_id:
-        context.user_data.clear()
-        await message.reply_text("Reklam kanali bulunamadi. Islem iptal edildi.")
-        return
-
+    price = safe_int(context.user_data.get("ad_price"), 0)
     ch = await get_channel(channel_id)
-    if not ch or not ch.get("active"):
-        context.user_data.clear()
-        await message.reply_text("Secilen kanal bulunamadi veya pasif. Islem iptal edildi.")
+    if not ch:
+        await message.reply_text("â Kanal bulunamadÄ±.")
         return
-
-    if price <= 0:
-        price = get_channel_ad_price(ch)
-        context.user_data["ad_price"] = price
-
-    title = context.user_data.get("ad_title")
-    ad_text = context.user_data.get("ad_text")
-    link = context.user_data.get("ad_link")
-    image_line = "Var" if context.user_data.get("ad_image_file_id") else "Yok"
-
-    kb = [[
-        InlineKeyboardButton("Onaya Gonder", callback_data="ad_submit"),
-        InlineKeyboardButton("Iptal", callback_data="ad_cancel"),
-    ]]
-
-    await message.reply_text(
-        f"\U0001f4e3 Reklam Onizleme\n\n"
-        f"Kanal: {channel_name}\n"
-        f"Fiyat: {price} Stars\n"
-        f"Gorsel: {image_line}\n\n"
-        f"Baslik: {title}\n\n"
-        f"Metin:\n{ad_text}\n\n"
-        f"Link: {link}\n\n"
-        f"Onaya gonderirsen bakiye hemen duser. Admin reddederse iade edilir.",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
-    context.user_data["mode"] = "ad_preview"
-
-
-async def submit_ad_order(query, context):
-    if context.user_data.get("mode") != "ad_preview":
-        await query.message.reply_text("Aktif reklam onizlemesi yok.")
+    clean_link = normalize_link(link)
+    if not clean_link:
+        await message.reply_text("â Link hatalÄ±. https://t.me/... Åeklinde gÃ¶nder.")
         return
-
-    channel_id = context.user_data.get("ad_channel_id")
-    ch = await get_channel(channel_id) if channel_id else None
-
-    if not ch or not ch.get("active"):
-        context.user_data.clear()
-        await query.message.reply_text("Secilen kanal bulunamadi veya pasif.")
+    if risk_words(f"{title} {body} {clean_link}"):
+        await message.reply_text("â Reklam metni riskli gÃ¶rÃ¼nÃ¼yor. LÃ¼tfen yasal ve nÃ¶tr bir metinle tekrar dene.")
         return
-
-    price = int(context.user_data.get("ad_price") or get_channel_ad_price(ch))
-    test_order = test_mode_on() and is_admin(query.from_user.id)
-    balance = await get_ad_balance(query.from_user.id)
-
-    if balance < price and not test_order:
-        context.user_data.clear()
-        await query.message.reply_text(
-            f"Bakiyen yetersiz. Islem iptal edildi.\n\n"
-            f"Gerekli: {price} Stars\n"
-            f"Bakiyen: {balance} Stars"
-        )
-        return
-
-    if not test_order:
-        ok = await change_ad_balance(
-            query.from_user.id,
-            -price,
-            "ad_hold",
-            f"Reklam talebi icin bakiye dusuldu: {ch.get('name')}",
-        )
-        if not ok:
-            context.user_data.clear()
-            await query.message.reply_text("Bakiye dusulemedi. Islem iptal edildi.")
+    if not (is_admin(user.id) and test_mode_on()):
+        if not spend_balance(user.id, price, f"Reklam talebi: {ch.get('name')}"):
+            await message.reply_text("â Bakiyen yetersiz.")
             return
-    else:
-        price = 0
-
-    order = {
-        "user_id": query.from_user.id,
-        "username": safe_username(query.from_user),
-        "package_id": None,
-        "channel_id": int(channel_id),
+    row = supabase.table("ad_orders").insert({
+        "user_id": user.id,
+        "username": username_of(user),
+        "channel_id": channel_id,
         "target_type": "single",
-        "title": context.user_data.get("ad_title"),
-        "ad_text": context.user_data.get("ad_text"),
-        "link": context.user_data.get("ad_link"),
-        "image_file_id": context.user_data.get("ad_image_file_id"),
+        "title": title[:80],
+        "ad_text": body[:800],
+        "link": clean_link,
         "status": "pending",
         "price": price,
-    }
-
-    res = supabase.table("ad_orders").insert(order).execute()
-    order_id = res.data[0]["id"] if res.data else None
-
-    await log_event(
-        "ad_order_created",
-        query.from_user.id,
-        query.from_user.id,
-        channel_id=int(channel_id),
-        details=f"order_id={order_id}, price={price}",
-    )
-
+    }).execute().data[0]
     context.user_data.clear()
-
-    await query.message.reply_text(
-        f"Reklam talebin admin onayina gonderildi.\n\n"
-        f"Kanal: {ch.get('name')}\n"
-        f"Kesilen bakiye: {price} Stars\n"
-        f"Kalan bakiye: {await get_ad_balance(query.from_user.id)} Stars"
-        + ("\n\nTest modu aktif: admin reklamindan bakiye dusulmedi." if test_order else "")
-    )
-
+    await message.reply_text("â Reklam talebin admin onayÄ±na gÃ¶nderildi.")
     try:
-        await context.bot.send_message(
-            OWNER_ID,
-            f"Yeni reklam talebi\n\n"
-            f"Order ID: {order_id}\n"
-            f"Kullanici: @{safe_username(query.from_user) or 'yok'}\n"
-            f"Kanal: {ch.get('name')}\n"
-            f"Fiyat: {price} Stars\n"
-            f"Baslik: {order['title']}"
-        )
+        await context.bot.send_message(OWNER_ID, f"ð£ Yeni reklam talebi\nID: {row['id']}\nKullanÄ±cÄ±: {user.id}\nKanal: {ch.get('name')}\nFiyat: {price} Stars")
     except Exception:
         pass
 
@@ -3951,578 +1028,661 @@ async def submit_ad_order(query, context):
 async def my_ad_orders(message, user_id):
     rows = supabase.table("ad_orders").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
     if not rows:
-        await message.reply_text("Henuz reklam talebin yok.")
+        await message.reply_text("ð HenÃ¼z reklam talebin yok.")
         return
-
+    text = "ð ReklamlarÄ±m\n\n"
     for o in rows:
-        views = o.get("views_count")
-        if views is None:
-            views = 0
-        clicks = safe_int(o.get("clicks_count"), 0)
-        links = o.get("published_links") or ""
-
-        ch_name = "-"
-        if o.get("channel_id"):
-            ch = await get_channel(o.get("channel_id"))
-            ch_name = (ch or {}).get("name") or f"Kanal ID {o.get('channel_id')}"
-
-        msg = (
-            f"\U0001f4c4 Reklam #{o['id']}\n\n"
-            f"Kanal: {ch_name}\n"
-            f"Durum: {o.get('status')}\n"
-            f"Fiyat: {o.get('price')} Stars\n"
-            f"Baslik: {o.get('title')}\n"
-            f"Goruntulenme: {views}\n"
-            f"Tiklama: {clicks}\n"
-        )
-
-        if links:
-            msg += f"\nYayin linkleri:\n{links[:1200]}"
-        else:
-            msg += "\nYayin linki henuz yok."
-
-        await message.reply_text(msg[:3900])
-
-async def ai_check_ad_order_message(message, order_id):
-    if not ai_available():
-        await message.reply_text(ai_missing_text())
-        return
-    row = supabase.table("ad_orders").select("*").eq("id", int(order_id)).execute().data
-    if not row:
-        await message.reply_text("Reklam talebi bulunamadi.")
-        return
-    order = row[0]
-    await message.reply_text("AI reklam kontrolu yapiliyor...")
-    try:
-        result = await ai_check_ad_content(order.get("title") or "", order.get("ad_text") or "", order.get("link") or "")
-        await message.reply_text(f"\U0001f916 AI Reklam Kontrolu #{order_id}\n\n{result}\n\nSon karar yine adminde. Gerekirse Onayla veya Reddet butonlarini kullan.")
-    except Exception as e:
-        logger.error("AI reklam kontrol hatasi: %s", e)
-        await message.reply_text("AI kontrol yapilamadi. GROQ_API_KEY / AI_MODEL ve Railway loglarini kontrol et.")
+        text += f"ID: {o.get('id')}\nBaÅlÄ±k: {o.get('title')}\nDurum: {o.get('status')}\nFiyat: {o.get('price')} Stars\nGÃ¶rÃ¼ntÃ¼lenme: {o.get('views_count') or 0}\nTÄ±klama: {o.get('clicks_count') or 0}\nLink: {o.get('published_links') or '-'}\n\n"
+    await message.reply_text(text[:3900])
 
 
-async def ad_orders_admin_message(message):
-    rows = supabase.table("ad_orders").select("*").eq("status", "pending").order("id", desc=True).limit(20).execute().data or []
-    if not rows:
-        await message.reply_text("Bekleyen reklam talebi yok.")
-        return
-
-    for o in rows:
-        ch = None
-        if o.get("channel_id"):
-            ch = await get_channel(o.get("channel_id"))
-
-        kb = [
-            [
-                InlineKeyboardButton("Onayla ve Yayinla", callback_data=f"ad_approve_{o['id']}"),
-                InlineKeyboardButton("Reddet ve Iade", callback_data=f"ad_reject_{o['id']}"),
-            ],
-            [
-                InlineKeyboardButton("Uygunsuz", callback_data=f"ad_reject_reason_content_{o['id']}"),
-                InlineKeyboardButton("Link Hatali", callback_data=f"ad_reject_reason_link_{o['id']}"),
-            ],
-            [
-                InlineKeyboardButton("Eksik Bilgi", callback_data=f"ad_reject_reason_missing_{o['id']}"),
-                InlineKeyboardButton("Kurallara Aykiri", callback_data=f"ad_reject_reason_rules_{o['id']}"),
-            ],
-            [InlineKeyboardButton("\U0001f916 AI Kontrol", callback_data=f"ad_ai_check_{o['id']}"), InlineKeyboardButton("Goruntulenme Gir", callback_data=f"ad_views_{o['id']}")],
-        ]
-
-        image_line = "Var" if o.get("image_file_id") else "Yok"
-        channel_line = (ch or {}).get("name") or f"Kanal ID {o.get('channel_id') or '-'}"
-
-        await message.reply_text(
-            f"\U0001f4e3 Reklam Talebi #{o['id']}\n\n"
-            f"Kullanici: @{o.get('username') or 'yok'}\n"
-            f"User ID: {o.get('user_id')}\n"
-            f"Kanal: {channel_line}\n"
-            f"Fiyat: {o.get('price')} Stars\n"
-            f"Gorsel: {image_line}\n\n"
-            f"Baslik: {o.get('title')}\n\n"
-            f"Metin:\n{o.get('ad_text')}\n\n"
-            f"Link: {o.get('link')}",
-            reply_markup=InlineKeyboardMarkup(kb),
-        )
-
-async def ad_packages_admin_message(message):
-    await ensure_default_ad_packages()
-    rows = supabase.table("ad_packages").select("*").order("id").execute().data or []
-    if not rows:
-        await message.reply_text("Reklam paketi yok.")
-        return
-    for p in rows:
-        status = "Aktif" if p.get("active") else "Pasif"
-        target = "Tum kanallar" if p.get("target_type") == "all" else f"Tek kanal / channel_id={p.get('channel_id') or 'ilk aktif kanal'}"
-        kb = [
-            [InlineKeyboardButton("Fiyat", callback_data=f"adpkg_price_{p['id']}"), InlineKeyboardButton("Aciklama", callback_data=f"adpkg_desc_{p['id']}")],
-            [InlineKeyboardButton("Hedef", callback_data=f"adpkg_target_{p['id']}"), InlineKeyboardButton("Ac/Kapat", callback_data=f"adpkg_toggle_{p['id']}")],
-            [InlineKeyboardButton("Sil", callback_data=f"adpkg_delete_{p['id']}")],
-        ]
-        await message.reply_text(
-            f"Paket ID: {p['id']}\n"
-            f"Ad: {p.get('name')}\n"
-            f"Fiyat: {p.get('price')} Stars\n"
-            f"Hedef: {target}\n"
-            f"Durum: {status}\n"
-            f"Aciklama: {p.get('description') or '-'}",
-            reply_markup=InlineKeyboardMarkup(kb),
-        )
-
-
-async def ad_channel_prices_admin_message(message):
-    rows = supabase.table("channels").select("*").eq("active", True).order("id").execute().data or []
-    if not rows:
-        await message.reply_text("Aktif kanal yok. Once VIP kanal eklemelisin.")
-        return
-
-    await message.reply_text("\U0001f4e3 Kanal Reklam Fiyatlari\n\nKullanicilar reklam verirken paket secmez; direkt kanal secer.")
-
-    for ch in rows:
-        price = get_channel_ad_price(ch)
-        await message.reply_text(
-            f"Kanal ID: {ch.get('id')}\n"
-            f"Ad: {ch.get('name')}\n"
-            f"Reklam fiyati: {price} Stars\n"
-            f"Chat ID: {ch.get('chat_id') or '-'}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Fiyat Degistir", callback_data=f"adchprice_{ch['id']}")]])
-        )
-
-async def ad_balances_admin_message(message):
-    rows = supabase.table("ad_balances").select("*").order("balance", desc=True).limit(20).execute().data or []
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("\u2795 Kullan\u0131c\u0131ya Bakiye Y\xfckle", callback_data="admin_add_user_balance")],
-    ])
-    if not rows:
-        await message.reply_text(
-            "\U0001f4b0 Bakiye \u0130\u015flemleri\n\n"
-            "Hen\xfcz bakiye kayd\u0131 yok.\n\n"
-            "Kullan\u0131c\u0131ya manuel reklam bakiyesi eklemek i\xe7in a\u015fa\u011f\u0131daki butona bas.",
-            reply_markup=kb,
-        )
-        return
-    text = "\U0001f4b0 Reklam Bakiyeleri\n\n"
-    for r in rows:
-        text += f"User ID: {r.get('user_id')} | Bakiye: {r.get('balance')} | Harcanan: {r.get('spent') or 0}\n"
-    text += "\nManuel bakiye eklemek i\xe7in a\u015fa\u011f\u0131daki butonu kullan."
-    await message.reply_text(text[:3900], reply_markup=kb)
-
-async def toggle_ad_package(message, package_id, admin_id):
-    row = supabase.table("ad_packages").select("*").eq("id", package_id).single().execute().data
-    if not row:
-        await message.reply_text(" Paket bulunamadi.")
-        return
-    supabase.table("ad_packages").update({"active": not bool(row.get("active"))}).eq("id", package_id).execute()
-    await log_event("ad_package_toggled", admin_id, details=f"package_id={package_id}")
-    await message.reply_text(" Reklam paketi durumu degistirildi.")
-
-
-def build_ad_message(order):
-    return f"\U0001f4e3 Sponsorlu Reklam\n\n{order.get('title')}\n\n{order.get('ad_text')}"
-
-
-
-def build_private_message_link(chat_id, message_id):
-    raw = str(chat_id)
-    if raw.startswith("-100"):
-        return f"https://t.me/c/{raw[4:]}/{message_id}"
-    return ""
-
-
-async def get_bot_username(context):
-    try:
-        me = await context.bot.get_me()
-        return me.username
-    except Exception:
-        return None
-
-
-
-async def publish_ad_to_targets(context, order, package=None):
-    channels = []
-
-    # New flow: user selected a concrete channel. No ad package is used.
-    if order.get("channel_id"):
-        ch = await get_channel(order.get("channel_id"))
-        if ch:
-            channels = [ch]
-
-    # Backward compatibility for old orders created with packages.
-    elif package:
-        if package.get("target_type") == "all":
-            channels = supabase.table("channels").select("*").eq("active", True).execute().data or []
-        else:
-            cid = package.get("channel_id")
-            if cid:
-                ch = await get_channel(cid)
-                if ch:
-                    channels = [ch]
-            else:
-                rows = supabase.table("channels").select("*").eq("active", True).order("id").limit(1).execute().data or []
-                channels = rows
-
-    sent = []
-    errors = []
-    links = []
-    total_views = 0
-
-    bot_username = await get_bot_username(context)
-    target_url = order.get("link")
-
-    if bot_username and order.get("id"):
-        button_url = f"https://t.me/{bot_username}?start=ad_{order['id']}"
-    else:
-        button_url = target_url
-
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Incele", url=button_url)]])
-
-    for ch in channels:
-        chat_id = ch.get("chat_id")
-        if not chat_id:
-            errors.append(f"{ch.get('name')}: chat_id yok")
-            continue
-
-        try:
-            if order.get("image_file_id"):
-                msg = await context.bot.send_photo(
-                    chat_id=int(chat_id),
-                    photo=order.get("image_file_id"),
-                    caption=build_ad_message(order),
-                    reply_markup=kb,
-                )
-            else:
-                msg = await context.bot.send_message(
-                    chat_id=int(chat_id),
-                    text=build_ad_message(order),
-                    reply_markup=kb,
-                    disable_web_page_preview=False,
-                )
-
-            sent.append(f"{chat_id}:{msg.message_id}")
-            link = build_private_message_link(chat_id, msg.message_id)
-            if link:
-                links.append(link)
-            total_views += safe_int(getattr(msg, "views", 0), 0)
-
-        except Exception as e:
-            errors.append(f"{chat_id}:{e}")
-
-    return sent, errors, links, total_views
-
-
-async def approve_and_publish_ad(message, context, order_id, admin_id):
-    order = supabase.table("ad_orders").select("*").eq("id", order_id).single().execute().data
-    if not order:
-        await message.reply_text("Reklam talebi bulunamadi.")
-        return
-
-    if order.get("status") != "pending":
-        await message.reply_text(f"Bu reklam artik pending degil. Durum: {order.get('status')}")
-        return
-
-    package = None
-    if not order.get("channel_id") and order.get("package_id"):
-        try:
-            package = supabase.table("ad_packages").select("*").eq("id", order.get("package_id")).single().execute().data
-        except Exception:
-            package = None
-
-    if not order.get("channel_id") and not package:
-        await reject_and_refund_ad(message, order_id, admin_id, reason="Kanal bulunamadi")
-        return
-
-    sent, errors, links, total_views = await publish_ad_to_targets(context, order, package)
-
-    if sent:
-        update_data = {
-            "status": "published",
-            "published_message_ids": ",".join(sent),
-            "published_links": "\n".join(links),
-            "published_chat_count": len(sent),
-            "views_count": total_views,
-            "published_at": now_utc().isoformat(),
-        }
-        supabase.table("ad_orders").update(update_data).eq("id", order_id).execute()
-
-        await log_event(
-            "ad_published",
-            admin_id,
-            order.get("user_id"),
-            channel_id=order.get("channel_id"),
-            details=f"order_id={order_id}, sent={len(sent)}, errors={len(errors)}",
-        )
-
-        await message.reply_text(f"Reklam yayinlandi. Gonderilen kanal/grup: {len(sent)}")
-
-        links_text = "\n".join(links) if links else "Link olusmadi ama reklam gonderildi."
-        try:
-            await context.bot.send_message(
-                order.get("user_id"),
-                f"Reklamin onaylandi ve yayinlandi.\n\n"
-                f"Reklam ID: {order_id}\n"
-                f"Gonderilen kanal/grup: {len(sent)}\n\n"
-                f"Yayin linkleri:\n{links_text[:1500]}"
-            )
-        except Exception:
-            pass
-    else:
-        await change_ad_balance(
-            order.get("user_id"),
-            int(order.get("price") or 0),
-            "ad_auto_refund",
-            "Reklam yayinlanamadi, otomatik iade",
-            order_id,
-        )
-        supabase.table("ad_orders").update({"status": "failed_refunded", "reject_reason": "; ".join(errors)[:900]}).eq("id", order_id).execute()
-        await log_event("ad_publish_failed_refunded", admin_id, order.get("user_id"), channel_id=order.get("channel_id"), details=f"order_id={order_id}")
-        await message.reply_text("Reklam yayinlanamadi. Bakiye otomatik iade edildi. Botun kanalda admin ve mesaj gonderme yetkisi oldugunu kontrol et.")
-
-async def reject_and_refund_ad(message, order_id, admin_id, reason="Admin reddetti"):
-    order = supabase.table("ad_orders").select("*").eq("id", order_id).single().execute().data
-    if not order:
-        await message.reply_text(" Reklam talebi bulunamadi.")
-        return
-    if order.get("status") != "pending":
-        await message.reply_text(f" Bu reklam artik pending degil. Durum: {order.get('status')}")
-        return
-    await change_ad_balance(order.get("user_id"), int(order.get("price") or 0), "ad_refund", reason, order_id)
-    supabase.table("ad_orders").update({"status": "rejected_refunded", "reject_reason": reason}).eq("id", order_id).execute()
-    await log_event("ad_rejected_refunded", admin_id, order.get("user_id"), details=f"order_id={order_id}")
-    await message.reply_text(" Reklam reddedildi ve bakiye iade edildi.")
-
-
-async def delete_ad_package(message, package_id, admin_id):
-    row = supabase.table("ad_packages").select("*").eq("id", package_id).execute().data
-    if not row:
-        await message.reply_text("Paket bulunamadi.")
-        return
-    supabase.table("ad_packages").delete().eq("id", package_id).execute()
-    await log_event("ad_package_deleted", admin_id, details=f"package_id={package_id}")
-    await message.reply_text("Reklam paketi silindi.")
-
-
-async def ad_stats_admin_message(message):
-    rows = supabase.table("ad_orders").select("*").execute().data or []
-    today = now_utc().date().isoformat()
-    month = now_utc().strftime("%Y-%m")
-    total = len(rows)
-    pending = len([r for r in rows if r.get("status") == "pending"])
-    published = len([r for r in rows if r.get("status") == "published"])
-    rejected = len([r for r in rows if "reject" in str(r.get("status"))])
-    failed = len([r for r in rows if "failed" in str(r.get("status"))])
-    revenue_today = 0
-    revenue_month = 0
-    total_revenue = 0
-    total_views = 0
-    total_clicks = 0
-    for r in rows:
-        if r.get("status") == "published":
-            price = safe_int(r.get("price"), 0)
-            created = str(r.get("created_at") or "")
-            total_revenue += price
-            if created.startswith(today):
-                revenue_today += price
-            if created.startswith(month):
-                revenue_month += price
-        total_views += safe_int(r.get("views_count"), 0)
-        total_clicks += safe_int(r.get("clicks_count"), 0)
-    await message.reply_text(
-        "\U0001f4ca Reklam Istatistikleri\n\n"
-        f"Toplam talep: {total}\n"
-        f"Bekleyen: {pending}\n"
-        f"Yayinlanan: {published}\n"
-        f"Reddedilen: {rejected}\n"
-        f"Basarisiz: {failed}\n\n"
-        f"Bugun reklam geliri: {revenue_today} Stars\n"
-        f"Bu ay reklam geliri: {revenue_month} Stars\n"
-        f"Toplam reklam geliri: {total_revenue} Stars\n\n"
-        f"Kayitli goruntulenme: {total_views}\n"
-        f"Bot uzerinden tiklama: {total_clicks}"
-    )
-
-
-async def system_test_message(message, context):
-    checks = []
-    def ok(name): checks.append(f"\u2705 {name}")
-    def bad(name, err): checks.append(f"\u274c {name}: {str(err)[:120]}")
-    for table in ["users", "channels", "ad_balances", "ad_orders", "ad_transactions", "settings"]:
-        try:
-            supabase.table(table).select("*").limit(1).execute()
-            ok(f"{table} tablosu")
-        except Exception as e:
-            bad(f"{table} tablosu", e)
-    try:
-        me = await context.bot.get_me()
-        ok(f"Bot baglantisi @{me.username}")
-    except Exception as e:
-        bad("Bot baglantisi", e)
-    try:
-        ch = await get_first_active_channel()
-        if not ch:
-            checks.append("\u26a0\ufe0f Aktif kanal yok; reklam ve VIP link testi atlandi.")
-        else:
-            me = await context.bot.get_me()
-            member = await context.bot.get_chat_member(int(ch["chat_id"]), me.id)
-            ok(f"Bot kanal/grupta gorunuyor: {member.status}")
-    except Exception as e:
-        bad("Bot kanal admin/yetki kontrolu", e)
-    await message.reply_text("\U0001f9ea Sistem Testi\n\n" + "\n".join(checks)[:3500])
-
-
-async def handle_ad_click_start(update, context, raw_arg):
-    raw = raw_arg.replace("ad_", "")
-    if not raw.isdigit():
+async def handle_ad_click_start(update, context, arg):
+    order_id = safe_int(arg.replace("ad_", ""), 0)
+    if not order_id:
         return False
-    order_id = int(raw)
-    order = supabase.table("ad_orders").select("*").eq("id", order_id).execute().data
-    if not order:
-        await update.message.reply_text("Reklam bulunamadi veya kaldirilmis.")
-        return True
-    order = order[0]
-    current = safe_int(order.get("clicks_count"), 0) + 1
+    rows = supabase.table("ad_orders").select("*").eq("id", order_id).execute().data or []
+    if not rows:
+        return False
+    order = rows[0]
     try:
-        supabase.table("ad_orders").update({"clicks_count": current}).eq("id", order_id).execute()
         supabase.table("ad_clicks").insert({"order_id": order_id, "user_id": update.effective_user.id}).execute()
+        supabase.table("ad_orders").update({"clicks_count": safe_int(order.get("clicks_count"), 0) + 1}).eq("id", order_id).execute()
     except Exception:
         pass
-    link = order.get("link")
-    await update.message.reply_text(
-        f"\U0001f4e3 Reklam\n\n{order.get('title') or ''}\n\nDevam etmek icin butona bas.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Reklam Linkine Git", url=link)]]) if link else None,
-    )
+    await update.message.reply_text(f"ð Reklam baÄlantÄ±sÄ±:\n{order.get('link')}")
     return True
 
-
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mode = context.user_data.get("mode")
-    if mode != "ad_image":
-        await update.message.reply_text("Foto alindi ama aktif bir reklam islemi yok. Reklam icin Bakiye > Kanallara Reklam Ver akisini kullan.")
-        return
-    if not update.message.photo:
-        await update.message.reply_text("Foto bulunamadi. Tekrar gonder veya skip yaz.")
-        return
-    context.user_data["ad_image_file_id"] = update.message.photo[-1].file_id
-    await preview_ad_order(update.message, context)
-
-# =========================================================
-# JOBS
-# =========================================================
-
-async def expire_old_subscriptions_job(context: ContextTypes.DEFAULT_TYPE):
-    await expire_old_subscriptions(context)
+# =========================
+# SUPPORT / FAQ
+# =========================
+async def support_menu(message):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("ð¤ AI Destek CevabÄ±", callback_data="support_ai")],
+        [InlineKeyboardButton("ð¤ Admin'e Yaz", callback_data="support_admin")],
+    ])
+    await message.reply_text("ð Destek\n\nÃnce AI hÄ±zlÄ± cevap verebilir. ÃÃ¶zÃ¼lmezse admin'e iletebilirsin.", reply_markup=kb)
 
 
-async def expire_old_subscriptions(context: ContextTypes.DEFAULT_TYPE):
-    rows = supabase.table("subscriptions").select("*").eq("status", "active").execute().data or []
-    current = now_utc()
-    for sub in rows:
-        end = parse_dt(sub.get("end_date"))
-        if end and end < current:
-            ch = await get_channel(sub["channel_id"])
-            if ch:
-                await remove_user_from_channel(context, ch, sub["user_id"])
-            supabase.table("subscriptions").update({"status": "expired"}).eq("id", sub["id"]).execute()
-            await log_event("subscription_expired", None, sub["user_id"], sub["channel_id"])
-            try:
-                await context.bot.send_message(sub["user_id"], "\u23f0 VIP uyelik suren bitti. Yeniden satin almak icin VIP Kanallar bolumunu kullanabilirsin.")
-            except Exception:
-                pass
+async def faq_user_message(message):
+    faqs = [
+        ("Botu VIP gruba/kanala nasÄ±l baÄlarÄ±m?", "Botu ilgili kanal veya gruba admin yap. Mesaj gÃ¶nder, kullanÄ±cÄ± davet et ve kullanÄ±cÄ± yasakla yetkilerini aÃ§. Sonra kanala id yaz."),
+        ("Yeni link hakkÄ±m kaÃ§?", "Her aktif abonelikte en fazla 2 kez yeni link isteyebilirsin."),
+        ("Ãdeme yaptÄ±m link gelmedi", "ÃyeliÄim ekranÄ±ndan Link GÃ¶nder butonunu dene. Olmazsa destek aÃ§."),
+        ("Reklam bakiyesi nedir?", "Kanallara reklam vermek iÃ§in kullanÄ±lan Stars bakiyesidir."),
+        ("Otomatik video nasÄ±l Ã§alÄ±ÅÄ±r?", "Depo kanalÄ±na video atÄ±lÄ±r, bot ana kanala sadece videoyu gÃ¶nderir. Caption gitmez."),
+    ]
+    kb = [[InlineKeyboardButton(q, callback_data=f"faq_{i}")] for i, (q, _) in enumerate(faqs)]
+    await message.reply_text("â SÄ±k Sorulan Sorular", reply_markup=InlineKeyboardMarkup(kb))
 
 
-async def warning_job(context: ContextTypes.DEFAULT_TYPE):
-    rows = supabase.table("subscriptions").select("*").eq("status", "active").execute().data or []
-    current = now_utc()
-    for sub in rows:
-        end = parse_dt(sub.get("end_date"))
-        if not end:
-            continue
-        remaining = end - current
-        ch = await get_channel(sub["channel_id"])
-        name = ch.get("name") if ch else f"Kanal ID {sub['channel_id']}"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton(" Uyeligi Uzat", callback_data=f"buyc_{sub['channel_id']}")]])
-        if remaining <= timedelta(days=1) and not sub.get("warn_1d_sent"):
-            try:
-                await context.bot.send_message(sub["user_id"], f" VIP uyeligin 1 gun icinde bitiyor.\n\n Kanal: {name}\nSimdi yenilersen erken yenileme bonusu kazanirsin.", reply_markup=kb)
-                supabase.table("subscriptions").update({"warn_1d_sent": True}).eq("id", sub["id"]).execute()
-            except Exception:
-                pass
-        elif remaining <= timedelta(days=3) and not sub.get("warn_3d_sent"):
-            try:
-                await context.bot.send_message(sub["user_id"], f" VIP uyeligin 3 gun icinde bitiyor.\n\n Kanal: {name}\nSimdi yenilersen erken yenileme bonusu kazanirsin.", reply_markup=kb)
-                supabase.table("subscriptions").update({"warn_3d_sent": True}).eq("id", sub["id"]).execute()
-            except Exception:
-                pass
+async def answer_faq(message, idx):
+    faqs = [
+        ("Botu VIP gruba/kanala nasÄ±l baÄlarÄ±m?", "Botu ilgili kanal veya gruba admin yap. Mesaj gÃ¶nder, kullanÄ±cÄ± davet et ve kullanÄ±cÄ± yasakla yetkilerini aÃ§. Sonra kanala id yaz."),
+        ("Yeni link hakkÄ±m kaÃ§?", "Her aktif abonelikte en fazla 2 kez yeni link isteyebilirsin."),
+        ("Ãdeme yaptÄ±m link gelmedi", "ÃyeliÄim ekranÄ±ndan Link GÃ¶nder butonunu dene. Olmazsa destek aÃ§."),
+        ("Reklam bakiyesi nedir?", "Kanallara reklam vermek iÃ§in kullanÄ±lan Stars bakiyesidir."),
+        ("Otomatik video nasÄ±l Ã§alÄ±ÅÄ±r?", "Depo kanalÄ±na video atÄ±lÄ±r, bot ana kanala sadece videoyu gÃ¶nderir. Caption gitmez."),
+    ]
+    if 0 <= idx < len(faqs):
+        q, a = faqs[idx]
+        await message.reply_text(f"â {q}\n\n{a}")
+
+# =========================
+# ADMIN
+# =========================
+async def admin_dashboard_text():
+    today = now_utc().date().isoformat()
+    sales = supabase.table("sales").select("*").execute().data or []
+    active_subs = supabase.table("subscriptions").select("*").eq("status", "active").execute().data or []
+    pending_ads = supabase.table("ad_orders").select("*").eq("status", "pending").execute().data or []
+    support = supabase.table("support_requests").select("*").eq("status", "open").execute().data or []
+    today_sales = [s for s in sales if str(s.get("created_at") or "").startswith(today)]
+    return (
+        "ð Admin Panel\n\n"
+        f"BugÃ¼nkÃ¼ satÄ±Å: {len(today_sales)}\n"
+        f"Aktif Ã¼yelik: {len(active_subs)}\n"
+        f"Bekleyen reklam: {len(pending_ads)}\n"
+        f"AÃ§Ä±k destek: {len(support)}\n"
+        f"BakÄ±m modu: {'AÃIK' if maintenance_on() else 'KAPALI'}"
+    )
 
 
-async def abandoned_checkout_job(context: ContextTypes.DEFAULT_TYPE):
-    rows = supabase.table("checkout_intents").select("*").eq("status", "started").eq("reminder_sent", False).execute().data or []
-    current = now_utc()
-    for row in rows:
-        created = parse_dt(row.get("created_at"))
-        if not created or current - created < timedelta(hours=ABANDONED_REMINDER_HOURS):
-            continue
-        callback = f"buyc_{row['item_id']}" if row.get("item_type") == "channel" else f"buyp_{row['item_id']}"
-        try:
-            await context.bot.send_message(row["user_id"], " Odemeyi baslatmistin ama tamamlanmamis gorunuyor. Devam etmek istersen asagidaki butona basabilirsin.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Odemeye Devam Et", callback_data=callback)]]))
-            supabase.table("checkout_intents").update({"reminder_sent": True}).eq("id", row["id"]).execute()
-        except Exception:
-            pass
+async def open_admin_panel(message):
+    kb = [
+        [InlineKeyboardButton("ð Bekleyen Ä°Åler", callback_data="admin_pending")],
+        [InlineKeyboardButton("ð¢ Kanal Ekle", callback_data="admin_add_channel")],
+        [InlineKeyboardButton("ð¢ KanallarÄ± YÃ¶net", callback_data="admin_channels")],
+        [InlineKeyboardButton("ð¥ KullanÄ±cÄ±lar", callback_data="admin_users")],
+        [InlineKeyboardButton("ð£ Reklam Talepleri", callback_data="admin_ads")],
+        [InlineKeyboardButton("ð¬ Otomatik Video", callback_data="admin_video")],
+        [InlineKeyboardButton("ð¤ AI GÃ¼nlÃ¼k Ãzet", callback_data="admin_ai_summary")],
+        [InlineKeyboardButton("ð§ª Sistem Testi", callback_data="admin_system_test")],
+        [InlineKeyboardButton("ð§ BakÄ±m AÃ§/Kapat", callback_data="admin_maintenance")],
+    ]
+    await message.reply_text(await admin_dashboard_text(), reply_markup=InlineKeyboardMarkup(kb))
 
 
-async def daily_report_job(context: ContextTypes.DEFAULT_TYPE):
-    """Send a compact AI business report to owner. Scheduled twice a day."""
+async def admin_pending(message):
+    ads = supabase.table("ad_orders").select("*").eq("status", "pending").execute().data or []
+    cancels = supabase.table("cancel_requests").select("*").eq("status", "pending").execute().data or []
+    support = supabase.table("support_requests").select("*").eq("status", "open").execute().data or []
+    failed = supabase.table("ad_orders").select("*").eq("status", "failed").execute().data or []
+    await message.reply_text(f"ð Bekleyen Ä°Åler\n\nð£ Reklam: {len(ads)}\nâ Ä°ptal: {len(cancels)}\nð Destek: {len(support)}\nâ ï¸ BaÅarÄ±sÄ±z reklam: {len(failed)}")
+
+
+async def admin_system_test(message, context):
+    lines = ["ð§ª Sistem Testi"]
     try:
-        summary = await ai_daily_business_summary()
-        await context.bot.send_message(OWNER_ID, f"\U0001f916 AI Gunluk Ozet\n\n{summary}")
+        supabase.table("users").select("id").limit(1).execute()
+        lines.append("â Supabase baÄlantÄ±sÄ±")
     except Exception as e:
-        logger.error("Gunluk AI rapor gonderilemedi: %s", e)
+        lines.append(f"â Supabase: {e}")
+    lines.append("â AI aktif" if ai_available() else "â ï¸ AI aktif deÄil")
+    lines.append("â Bot Ã§alÄ±ÅÄ±yor")
+    await message.reply_text("\n".join(lines))
+
+
+async def admin_add_channel_prompt(message, context):
+    context.user_data["mode"] = "add_channel"
+    await message.reply_text(
+        "ð¢ Kanal ekle\n\nFormat:\nAd | VIP Fiyat | ChatID | SÃ¼reGÃ¼n | AÃ§Ä±klama | GÃ¶rselURL | ReklamFiyatÄ±\n\nÃrnek:\nNUDE PLUS+ | 1000 | -1003921378538 | 30 | VIP kanal | https://site.com/a.jpg | 1000"
+    )
+
+
+async def admin_channels(message):
+    rows = supabase.table("channels").select("*").order("id").execute().data or []
+    if not rows:
+        await message.reply_text("ð¢ Kanal yok.")
+        return
+    for ch in rows:
+        status = "Aktif" if ch.get("active") else "Pasif"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("âï¸ Ad", callback_data=f"ched_name_{ch['id']}"), InlineKeyboardButton("ð° VIP Fiyat", callback_data=f"ched_price_{ch['id']}")],
+            [InlineKeyboardButton("ð Chat ID", callback_data=f"ched_chat_{ch['id']}"), InlineKeyboardButton("â³ SÃ¼re", callback_data=f"ched_days_{ch['id']}")],
+            [InlineKeyboardButton("ð¼ï¸ GÃ¶rsel", callback_data=f"ched_photo_{ch['id']}"), InlineKeyboardButton("ð£ Reklam FiyatÄ±", callback_data=f"ched_adprice_{ch['id']}")],
+            [InlineKeyboardButton("AÃ§/Kapat", callback_data=f"chtoggle_{ch['id']}"), InlineKeyboardButton("ðï¸ Sil", callback_data=f"chdel_{ch['id']}")],
+        ])
+        await message.reply_text(
+            f"ð¢ Kanal ID: {ch.get('id')}\nAd: {ch.get('name')}\nVIP fiyat: {ch.get('price')}\nReklam fiyatÄ±: {ch.get('ad_price') or 1000}\nChat ID: {ch.get('chat_id')}\nSÃ¼re: {ch.get('duration_days')} gÃ¼n\nDurum: {status}",
+            reply_markup=kb,
+        )
+
+
+async def admin_users(message):
+    rows = supabase.table("users").select("*").order("id", desc=True).limit(20).execute().data or []
+    if not rows:
+        await message.reply_text("ð¥ KullanÄ±cÄ± yok.")
+        return
+    for u in rows:
+        bal, spent = get_balance(u.get("user_id"))
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("ð° Bakiye YÃ¼kle", callback_data=f"userbal_{u.get('user_id')}")]])
+        await message.reply_text(f"ð¤ User ID: {u.get('user_id')}\nUsername: @{u.get('username') or '-'}\nBakiye: {bal} Stars\nHarcanan: {spent} Stars", reply_markup=kb)
+
+
+async def admin_ads(message):
+    rows = supabase.table("ad_orders").select("*").eq("status", "pending").order("id", desc=True).execute().data or []
+    if not rows:
+        await message.reply_text("ð£ Bekleyen reklam yok.")
+        return
+    for o in rows:
+        ch = await get_channel(o.get("channel_id"))
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("â Onayla ve YayÄ±nla", callback_data=f"adapprove_{o['id']}")],
+            [InlineKeyboardButton("â Reddet ve Ä°ade Et", callback_data=f"adreject_{o['id']}")],
+        ])
+        await message.reply_text(
+            f"ð£ Reklam Talebi\n\nID: {o.get('id')}\nKullanÄ±cÄ±: {o.get('user_id')}\nKanal: {ch.get('name') if ch else o.get('channel_id')}\nFiyat: {o.get('price')} Stars\n\nBaÅlÄ±k:\n{o.get('title')}\n\nMetin:\n{o.get('ad_text')}\n\nLink:\n{o.get('link')}",
+            reply_markup=kb,
+        )
+
+
+async def publish_ad_order(query, context, order_id):
+    rows = supabase.table("ad_orders").select("*").eq("id", int(order_id)).execute().data or []
+    if not rows:
+        await query.message.reply_text("â Reklam bulunamadÄ±.")
+        return
+    o = rows[0]
+    ch = await get_channel(o.get("channel_id"))
+    if not ch or not ch.get("chat_id"):
+        await query.message.reply_text("â Kanal Chat ID yok.")
+        return
+    try:
+        bot_username = (await context.bot.get_me()).username
+        track_url = f"https://t.me/{bot_username}?start=ad_{order_id}"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("ð Ä°ncele", url=track_url)]])
+        text = f"ð£ Sponsorlu Reklam\n\nð¥ {o.get('title')}\n{o.get('ad_text')}"
+        sent = await context.bot.send_message(chat_id=int(ch.get("chat_id")), text=text, reply_markup=kb)
+        link = private_channel_link(ch.get("chat_id"), sent.message_id)
+        supabase.table("ad_orders").update({
+            "status": "published",
+            "published_at": now_utc().isoformat(),
+            "published_links": link,
+            "published_chat_count": 1,
+        }).eq("id", int(order_id)).execute()
+        await query.message.reply_text("â Reklam yayÄ±nlandÄ±.")
         try:
-            await context.bot.send_message(OWNER_ID, f"Gunluk Rapor\n\n{await admin_dashboard_text()}")
+            await context.bot.send_message(o.get("user_id"), f"â ReklamÄ±n yayÄ±nlandÄ±.\nLink: {link or 'Kanal iÃ§inde yayÄ±nlandÄ±.'}")
         except Exception:
             pass
+    except Exception as e:
+        logger.error("publish ad error: %s", e)
+        add_balance(o.get("user_id"), safe_int(o.get("price"), 0), "Reklam yayÄ±nlanamadÄ± iade", order_id)
+        supabase.table("ad_orders").update({"status": "failed"}).eq("id", int(order_id)).execute()
+        await query.message.reply_text("â Reklam yayÄ±nlanamadÄ±. Bakiye iade edildi. Botun kanalda mesaj gÃ¶nderme yetkisini kontrol et.")
 
 
-
-async def weekly_giveaway_job(context: ContextTypes.DEFAULT_TYPE):
-    if now_utc().weekday() != 0:  # Monday
+async def reject_ad_order(query, context, order_id):
+    rows = supabase.table("ad_orders").select("*").eq("id", int(order_id)).execute().data or []
+    if not rows:
+        await query.message.reply_text("â Reklam bulunamadÄ±.")
         return
-    week = previous_week_key()
+    o = rows[0]
+    add_balance(o.get("user_id"), safe_int(o.get("price"), 0), "Reklam reddi iadesi", order_id)
+    supabase.table("ad_orders").update({"status": "rejected_refunded"}).eq("id", int(order_id)).execute()
+    await query.message.reply_text("â Reklam reddedildi ve bakiye iade edildi.")
+    try:
+        await context.bot.send_message(o.get("user_id"), "â Reklam talebin reddedildi. Bakiye hesabÄ±na iade edildi.")
+    except Exception:
+        pass
 
-    already = []
-    for table_name in ["giveaway_winners", "raffle_winners"]:
+# =========================
+# AUTO VIDEO
+# =========================
+def save_detected_chat(chat):
+    try:
+        chat_id = str(chat.id)
+        title = getattr(chat, "title", None) or getattr(chat, "username", None) or chat_id
+        rows = supabase.table("auto_video_detected_chats").select("*").eq("chat_id", chat_id).execute().data or []
+        payload = {"chat_id": chat_id, "title": title, "chat_type": str(getattr(chat, "type", "channel")), "updated_at": now_utc().isoformat()}
+        if rows:
+            supabase.table("auto_video_detected_chats").update(payload).eq("chat_id", chat_id).execute()
+        else:
+            supabase.table("auto_video_detected_chats").insert(payload).execute()
+    except Exception as e:
+        logger.error("save detected chat error: %s", e)
+
+
+async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    post = update.channel_post
+    if not post:
+        return
+    text = (post.text or post.caption or "").strip().lower()
+    if post.text and text in {"id", "chat id", "kanal id", "grup id"}:
+        save_detected_chat(post.chat)
+        await context.bot.send_message(post.chat_id, f"Chat ID:\n{post.chat_id}\n\nKanal kaydedildi. Admin Panel > Otomatik Video bÃ¶lÃ¼mÃ¼nden butonla seÃ§ebilirsin.")
+        return
+    if post.video:
+        await handle_auto_video(post, context)
+
+
+async def handle_auto_video(post, context):
+    src = str(post.chat_id)
+    routes = supabase.table("auto_video_routes").select("*").eq("source_chat_id", src).eq("active", True).execute().data or []
+    for r in routes:
+        exists = supabase.table("auto_video_sent").select("*").eq("route_id", r.get("id")).eq("source_message_id", post.message_id).execute().data or []
+        if exists:
+            continue
         try:
-            already = supabase.table(table_name).select("*").eq("week_key", week).execute().data or []
-            if already:
-                break
-        except Exception:
-            pass
-    if already:
-        return
+            sent = await context.bot.send_video(chat_id=int(r.get("target_chat_id")), video=post.video.file_id, caption=None)
+            supabase.table("auto_video_sent").insert({
+                "route_id": r.get("id"),
+                "source_chat_id": src,
+                "source_message_id": post.message_id,
+                "target_chat_id": str(r.get("target_chat_id")),
+                "target_message_id": sent.message_id,
+                "video_file_id": post.video.file_id,
+            }).execute()
+        except Exception as e:
+            logger.error("auto video send error: %s", e)
 
-    class DummyMsg:
-        async def reply_text(self, text, **kwargs):
+
+async def auto_video_panel(message):
+    routes = supabase.table("auto_video_routes").select("*").order("id", desc=True).execute().data or []
+    kb = [[InlineKeyboardButton("ð§­ Butonlu Kurulum", callback_data="av_setup")]]
+    await message.reply_text(
+        "ð¬ Otomatik Video\n\nDepo kanalÄ±na video attÄ±ÄÄ±nda ana kanala sadece video gider. YazÄ±/caption gÃ¶nderilmez.",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+    if not routes:
+        await message.reply_text("HenÃ¼z rota yok. Ãnce iki kanala da id yaz, sonra Butonlu Kurulum kullan.")
+        return
+    for r in routes:
+        status = "Aktif" if r.get("active") else "Pasif"
+        ikb = InlineKeyboardMarkup([[InlineKeyboardButton("AÃ§/Kapat", callback_data=f"avtoggle_{r['id']}"), InlineKeyboardButton("Sil", callback_data=f"avdel_{r['id']}")]])
+        await message.reply_text(f"Rota ID: {r.get('id')}\n{r.get('name') or '-'}\nKaynak: {r.get('source_chat_id')}\nHedef: {r.get('target_chat_id')}\nDurum: {status}", reply_markup=ikb)
+
+
+async def auto_video_setup_source(message):
+    chats = supabase.table("auto_video_detected_chats").select("*").order("updated_at", desc=True).limit(20).execute().data or []
+    if not chats:
+        await message.reply_text("KayÄ±tlÄ± kanal yok. Depo ve ana kanala dÃ¼z mesaj olarak id yaz.")
+        return
+    kb = [[InlineKeyboardButton(f"{c.get('title')} ({c.get('chat_id')})", callback_data=f"avsrc_{c.get('chat_id')}")] for c in chats]
+    await message.reply_text("Ãnce depo/kaynak kanalÄ±nÄ± seÃ§:", reply_markup=InlineKeyboardMarkup(kb))
+
+# =========================
+# TEXT MODES
+# =========================
+async def handle_text_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mode = context.user_data.get("mode")
+    text = (update.message.text or "").strip()
+    user = update.effective_user
+
+    try:
+        if mode == "topup_amount":
+            context.user_data.clear()
+            await create_topup_invoice(update.message, context, safe_int(text))
+
+        elif mode == "ad_one":
+            parsed = parse_ad_pipe(text)
+            if not parsed:
+                await update.message.reply_text("â Format: BaÅlÄ±k | Metin | Link")
+                return
+            await create_ad_order(update.message, context, *parsed)
+
+        elif mode == "ad_template":
+            parsed = parse_ad_pipe(text)
+            if not parsed:
+                await update.message.reply_text("â Format: BaÅlÄ±k | KÄ±sa aÃ§Ä±klama | Link")
+                return
+            title, short, link = parsed
+            body = f"{short}\n\nDetaylar iÃ§in butona bas."
+            await create_ad_order(update.message, context, title, body, link)
+
+        elif mode == "ad_ai_prompt":
+            await update.message.reply_text("Yapay zeka reklam metnini hazÄ±rlÄ±yor...")
+            variations, err = await ai_ad_variations(text)
+            if err:
+                await update.message.reply_text(err)
+                return
+            context.user_data["ai_ad_variations"] = variations
+            for i, v in enumerate(variations, start=1):
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("â Bu metni kullan", callback_data=f"aiaduse_{i-1}")]])
+                await update.message.reply_text(
+                    f"ð¤ SeÃ§enek {i}\n\nBaÅlÄ±k: {v.get('title')}\nMetin: {v.get('text')}\nButon: {v.get('button') or 'Ä°ncele'}",
+                    reply_markup=kb,
+                )
+
+        elif mode == "ad_ai_link":
+            title = context.user_data.get("ai_ad_title")
+            body = context.user_data.get("ai_ad_text")
+            if not title or not body:
+                context.user_data.clear()
+                await update.message.reply_text("â AI metni kayboldu. ReklamÄ± tekrar oluÅtur.")
+                return
+            await create_ad_order(update.message, context, title, body, text)
+
+        elif mode == "support_ai_text":
+            context.user_data["last_support_text"] = text
+            await update.message.reply_text("ð¤ Destek cevabÄ± hazÄ±rlanÄ±yor...")
+            ans = await ai_support_answer(text) or "Bu konu iÃ§in admin desteÄi gerekebilir. Ä°stersen mesajÄ±nÄ± adminâe iletebilirim."
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("â Sorunum Ã§Ã¶zÃ¼ldÃ¼", callback_data="support_done"), InlineKeyboardButton("ð¤ Admin'e gÃ¶nder", callback_data="support_send_admin")]])
+            await update.message.reply_text(ans, reply_markup=kb)
+
+        elif mode == "support_admin_text":
+            context.user_data.clear()
+            supabase.table("support_requests").insert({"user_id": user.id, "username": username_of(user), "message": text, "status": "open"}).execute()
+            await update.message.reply_text("â Destek talebin adminâe gÃ¶nderildi.")
             try:
-                await context.bot.send_message(OWNER_ID, text)
+                await context.bot.send_message(OWNER_ID, f"ð Yeni destek\nUser ID: {user.id}\nMesaj:\n{text}")
             except Exception:
                 pass
 
-    await run_giveaway(DummyMsg(), context, week, manual=False)
+        elif mode == "add_channel":
+            parts = [p.strip() for p in text.split("|")]
+            if len(parts) < 4:
+                await update.message.reply_text("â Format: Ad | VIP Fiyat | ChatID | SÃ¼reGÃ¼n | AÃ§Ä±klama | GÃ¶rselURL | ReklamFiyatÄ±")
+                return
+            payload = {
+                "name": parts[0],
+                "price": safe_int(parts[1], 0),
+                "chat_id": parts[2],
+                "duration_days": safe_int(parts[3], DEFAULT_DURATION_DAYS),
+                "description": parts[4] if len(parts) > 4 else None,
+                "photo_url": parts[5] if len(parts) > 5 and parts[5] != "-" else None,
+                "ad_price": safe_int(parts[6], 1000) if len(parts) > 6 else 1000,
+                "active": True,
+            }
+            supabase.table("channels").insert(payload).execute()
+            context.user_data.clear()
+            await update.message.reply_text("â Kanal eklendi.")
 
-# =========================================================
+        elif mode and mode.startswith("edit_channel_"):
+            channel_id = context.user_data.get("channel_id")
+            field = mode.replace("edit_channel_", "")
+            mapping = {
+                "name": ("name", text),
+                "price": ("price", safe_int(text)),
+                "chat": ("chat_id", text),
+                "days": ("duration_days", safe_int(text, DEFAULT_DURATION_DAYS)),
+                "photo": ("photo_url", None if text == "-" else text),
+                "adprice": ("ad_price", safe_int(text, 1000)),
+            }
+            col, val = mapping[field]
+            supabase.table("channels").update({col: val}).eq("id", int(channel_id)).execute()
+            context.user_data.clear()
+            await update.message.reply_text("â Kanal bilgisi gÃ¼ncellendi.")
+
+        elif mode == "admin_add_balance":
+            target = context.user_data.get("target_user_id")
+            amount = safe_int(text)
+            if amount <= 0:
+                await update.message.reply_text("â Sadece tutarÄ± yaz. Ãrnek: 2500")
+                return
+            add_balance(target, amount, f"Admin manuel bakiye yÃ¼kledi: {user.id}")
+            context.user_data.clear()
+            await update.message.reply_text(f"â {target} kullanÄ±cÄ±sÄ±na {amount} Stars bakiye eklendi.")
+            try:
+                await context.bot.send_message(target, f"â Admin hesabÄ±na {amount} Stars reklam bakiyesi ekledi.")
+            except Exception:
+                pass
+
+        else:
+            context.user_data.clear()
+            await update.message.reply_text("Ä°Ålem anlaÅÄ±lamadÄ±. MenÃ¼den tekrar seÃ§.")
+    except Exception as e:
+        logger.error("mode error: %s", e)
+        context.user_data.clear()
+        await update.message.reply_text("â Ä°Ålem sÄ±rasÄ±nda hata oldu. LÃ¼tfen tekrar dene.")
+
+# =========================
+# CALLBACKS
+# =========================
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+
+    if data == "flow_cancel":
+        context.user_data.clear()
+        await query.message.reply_text("â Ä°Ålem iptal edildi.")
+        return
+    if data == "quick_vip":
+        await show_vip_channels(query.message, user_id); return
+    if data == "quick_ad":
+        await show_ad_channel_choices(query.message, user_id); return
+    if data == "quick_status":
+        await user_status_message(query.message, user_id); return
+    if data == "quick_support":
+        await support_menu(query.message); return
+    if data.startswith("faq_"):
+        await answer_faq(query.message, safe_int(data.split("_")[1])); return
+    if data.startswith("chprev_"):
+        await show_channel_preview(query.message, safe_int(data.split("_")[1]), user_id); return
+    if data.startswith("buych_"):
+        await buy_channel(query, context); return
+    if data.startswith("resend_"):
+        await resend_link(query, context); return
+    if data.startswith("cancelreq_"):
+        await request_cancel(query, context); return
+
+    # balance / ads user
+    if data == "bal_topup":
+        await ask_topup_amount(query.message, context); return
+    if data == "bal_ad":
+        await show_ad_channel_choices(query.message, user_id); return
+    if data == "bal_myads":
+        await my_ad_orders(query.message, user_id); return
+    if data == "bal_tx":
+        await balance_transactions(query.message, user_id); return
+    if data.startswith("adch_"):
+        await start_ad_for_channel(query, context); return
+    if data == "ad_ai":
+        await ask_ad_ai(query.message, context); return
+    if data == "ad_one":
+        await ask_ad_one(query.message, context); return
+    if data == "ad_template":
+        await ask_ad_template(query.message, context); return
+    if data.startswith("aiaduse_"):
+        idx = safe_int(data.split("_")[1])
+        variations = context.user_data.get("ai_ad_variations") or []
+        if idx >= len(variations):
+            await query.message.reply_text("â SeÃ§enek bulunamadÄ±."); return
+        v = variations[idx]
+        context.user_data["mode"] = "ad_ai_link"
+        context.user_data["ai_ad_title"] = v.get("title") or "Sponsorlu Reklam"
+        context.user_data["ai_ad_text"] = v.get("text") or "Detaylar iÃ§in incele."
+        await query.message.reply_text("SeÃ§ilen reklam metni hazÄ±r. Åimdi sadece linki gÃ¶nder:\n\nÃrnek: https://t.me/kanal")
+        return
+
+    # support
+    if data == "support_ai":
+        context.user_data["mode"] = "support_ai_text"
+        await query.message.reply_text("Sorununu tek mesaj olarak yaz:")
+        return
+    if data == "support_admin":
+        context.user_data["mode"] = "support_admin_text"
+        await query.message.reply_text("Adminâe iletilecek mesajÄ±nÄ± yaz:")
+        return
+    if data == "support_done":
+        context.user_data.clear()
+        await query.message.reply_text("â Sevindim. BaÅka sorun olursa destek bÃ¶lÃ¼mÃ¼nÃ¼ kullanabilirsin.")
+        return
+    if data == "support_send_admin":
+        text = context.user_data.get("last_support_text") or "KullanÄ±cÄ± admin desteÄi istedi."
+        context.user_data.clear()
+        supabase.table("support_requests").insert({"user_id": user_id, "username": username_of(query.from_user), "message": text, "status": "open"}).execute()
+        await query.message.reply_text("â MesajÄ±n adminâe iletildi.")
+        try:
+            await context.bot.send_message(OWNER_ID, f"ð Destek\nUser ID: {user_id}\nMesaj:\n{text}")
+        except Exception:
+            pass
+        return
+
+    # admin only from here
+    if not is_admin(user_id):
+        await query.message.reply_text("â Yetkin yok.")
+        return
+
+    if data == "admin_pending": await admin_pending(query.message); return
+    if data == "admin_add_channel": await admin_add_channel_prompt(query.message, context); return
+    if data == "admin_channels": await admin_channels(query.message); return
+    if data == "admin_users": await admin_users(query.message); return
+    if data == "admin_ads": await admin_ads(query.message); return
+    if data == "admin_video": await auto_video_panel(query.message); return
+    if data == "admin_ai_summary":
+        await query.message.reply_text("ð¤ GÃ¼nlÃ¼k Ã¶zet hazÄ±rlanÄ±yor...")
+        await query.message.reply_text(await ai_daily_summary_text()); return
+    if data == "admin_system_test": await admin_system_test(query.message, context); return
+    if data == "admin_maintenance":
+        set_setting("maintenance", "off" if maintenance_on() else "on")
+        await query.message.reply_text("â BakÄ±m modu deÄiÅtirildi."); return
+
+    if data.startswith("ched_"):
+        parts = data.split("_")
+        field = parts[1]
+        ch_id = safe_int(parts[2])
+        context.user_data["mode"] = f"edit_channel_{field}"
+        context.user_data["channel_id"] = ch_id
+        prompts = {
+            "name": "Yeni kanal adÄ±nÄ± yaz:",
+            "price": "Yeni VIP fiyatÄ±nÄ± yaz:",
+            "chat": "Yeni Chat ID yaz:",
+            "days": "Yeni sÃ¼reyi gÃ¼n olarak yaz:",
+            "photo": "GÃ¶rsel URL yaz. KaldÄ±rmak iÃ§in - yaz:",
+            "adprice": "Yeni reklam fiyatÄ±nÄ± yaz:",
+        }
+        await query.message.reply_text(prompts.get(field, "Yeni deÄeri yaz:")); return
+    if data.startswith("chtoggle_"):
+        ch_id = safe_int(data.split("_")[1])
+        ch = await get_channel(ch_id)
+        if ch:
+            supabase.table("channels").update({"active": not bool(ch.get("active"))}).eq("id", ch_id).execute()
+        await query.message.reply_text("â Kanal durumu deÄiÅtirildi."); return
+    if data.startswith("chdel_"):
+        ch_id = safe_int(data.split("_")[1])
+        supabase.table("channels").delete().eq("id", ch_id).execute()
+        await query.message.reply_text("â Kanal silindi."); return
+    if data.startswith("userbal_"):
+        target = safe_int(data.split("_")[1])
+        context.user_data["mode"] = "admin_add_balance"
+        context.user_data["target_user_id"] = target
+        await query.message.reply_text(f"ð° {target} kullanÄ±cÄ±sÄ±na eklenecek bakiyeyi yaz.\n\nÃrnek: 2500"); return
+    if data.startswith("adapprove_"):
+        await publish_ad_order(query, context, safe_int(data.split("_")[1])); return
+    if data.startswith("adreject_"):
+        await reject_ad_order(query, context, safe_int(data.split("_")[1])); return
+    if data == "av_setup":
+        await auto_video_setup_source(query.message); return
+    if data.startswith("avsrc_"):
+        src = data.replace("avsrc_", "")
+        context.user_data["av_source"] = src
+        chats = supabase.table("auto_video_detected_chats").select("*").order("updated_at", desc=True).limit(20).execute().data or []
+        kb = [[InlineKeyboardButton(f"{c.get('title')} ({c.get('chat_id')})", callback_data=f"avtgt_{c.get('chat_id')}")] for c in chats if str(c.get("chat_id")) != str(src)]
+        await query.message.reply_text("Åimdi ana/hedef kanalÄ± seÃ§:", reply_markup=InlineKeyboardMarkup(kb)); return
+    if data.startswith("avtgt_"):
+        tgt = data.replace("avtgt_", "")
+        src = context.user_data.get("av_source")
+        if not src:
+            await query.message.reply_text("â Kaynak seÃ§imi kayboldu. Tekrar baÅlat."); return
+        supabase.table("auto_video_routes").insert({"source_chat_id": src, "target_chat_id": tgt, "name": f"{src} -> {tgt}", "active": True, "strip_caption": True}).execute()
+        context.user_data.pop("av_source", None)
+        await query.message.reply_text("â Otomatik video aktarma kuruldu. Depo kanalÄ±ndaki videolar ana kanala sadece video olarak gider."); return
+    if data.startswith("avtoggle_"):
+        rid = safe_int(data.split("_")[1])
+        rows = supabase.table("auto_video_routes").select("*").eq("id", rid).execute().data or []
+        if rows:
+            supabase.table("auto_video_routes").update({"active": not bool(rows[0].get("active"))}).eq("id", rid).execute()
+        await query.message.reply_text("â Rota durumu deÄiÅtirildi."); return
+    if data.startswith("avdel_"):
+        rid = safe_int(data.split("_")[1])
+        supabase.table("auto_video_routes").delete().eq("id", rid).execute()
+        await query.message.reply_text("â Rota silindi."); return
+
+
+async def balance_transactions(message, user_id):
+    rows = supabase.table("ad_transactions").select("*").eq("user_id", int(user_id)).order("id", desc=True).limit(10).execute().data or []
+    if not rows:
+        await message.reply_text("ð§¾ Bakiye hareketi yok.")
+        return
+    text = "ð§¾ Bakiye Hareketleri\n\n"
+    for r in rows:
+        text += f"{r.get('amount')} Stars | {r.get('description')} | {r.get('created_at')}\n"
+    await message.reply_text(text[:3900])
+
+# =========================
+# DAILY SUMMARY
+# =========================
+def collect_daily_metrics():
+    today = now_utc().date().isoformat()
+    yesterday = (now_utc().date() - timedelta(days=1)).isoformat()
+    def table(name):
+        try:
+            return supabase.table(name).select("*").execute().data or []
+        except Exception:
+            return []
+    sales = table("sales"); users = table("users"); subs = table("subscriptions"); support = table("support_requests"); ads = table("ad_orders"); balances = table("ad_balances")
+    return {
+        "today": today,
+        "sales_today": len([s for s in sales if str(s.get("created_at") or "").startswith(today)]),
+        "sales_yesterday": len([s for s in sales if str(s.get("created_at") or "").startswith(yesterday)]),
+        "new_users_today": len([u for u in users if str(u.get("created_at") or "").startswith(today)]),
+        "active_subscriptions": len([s for s in subs if s.get("status") == "active"]),
+        "expiring_today": len([s for s in subs if s.get("status") == "active" and parse_dt(s.get("end_date")) and parse_dt(s.get("end_date")).date().isoformat() == today]),
+        "open_support": len([s for s in support if s.get("status") == "open"]),
+        "pending_ads": len([a for a in ads if a.get("status") == "pending"]),
+        "failed_ads": len([a for a in ads if a.get("status") == "failed"]),
+        "total_ad_balance": sum(safe_int(b.get("balance"), 0) for b in balances),
+    }
+
+
+def fallback_daily_summary(data):
+    return (
+        "ð¤ GÃ¼nlÃ¼k Ãzet\n\n"
+        f"BugÃ¼nkÃ¼ VIP satÄ±Å: {data['sales_today']}\n"
+        f"Yeni kullanÄ±cÄ±: {data['new_users_today']}\n"
+        f"Aktif Ã¼yelik: {data['active_subscriptions']}\n"
+        f"BugÃ¼n bitecek Ã¼yelik: {data['expiring_today']}\n"
+        f"AÃ§Ä±k destek: {data['open_support']}\n"
+        f"Bekleyen reklam: {data['pending_ads']}\n\n"
+        "BugÃ¼n yapÄ±lacak 3 iÅ:\n"
+        "1. AÃ§Ä±k destekleri kontrol et.\n"
+        "2. BugÃ¼n bitecek Ã¼yeliklere yenileme hatÄ±rlatmasÄ± yap.\n"
+        "3. Bekleyen reklamlarÄ± onayla veya iade et."
+    )
+
+
+async def daily_ai_report_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await context.bot.send_message(OWNER_ID, await ai_daily_summary_text())
+    except Exception as e:
+        logger.error("daily report error: %s", e)
+
+# =========================
 # APP
-# =========================================================
-
+# =========================
 app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.VIDEO, auto_video_handler))
-app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.TEXT, channel_id_reader))
-app.add_handler(CallbackQueryHandler(button_router))
+app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post_handler))
+app.add_handler(CallbackQueryHandler(callbacks))
 app.add_handler(PreCheckoutQueryHandler(precheckout))
 app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
-app.job_queue.run_repeating(expire_old_subscriptions_job, interval=1800, first=30)
-app.job_queue.run_repeating(warning_job, interval=21600, first=60)
-app.job_queue.run_repeating(abandoned_checkout_job, interval=1800, first=300)
-app.job_queue.run_repeating(daily_report_job, interval=43200, first=600)
-print("Pasha VIP sade sistem calisiyor...")
+
+app.job_queue.run_repeating(expire_subscriptions_job, interval=1800, first=60)
+app.job_queue.run_repeating(daily_ai_report_job, interval=43200, first=300)
+
+print("Pasha Store bot Ã§alÄ±ÅÄ±yor...")
 app.run_polling()
